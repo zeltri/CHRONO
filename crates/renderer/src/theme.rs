@@ -33,10 +33,10 @@ impl Default for ModernTheme {
             bg_highlight: (57, 63, 74), // #393f4a - Selection/hover
 
             // Foreground - OneDark Pro text colors
-            fg_primary: (171, 178, 191),   // #abb2bf - Main text
-            fg_secondary: (145, 150, 161), // #9196a1 - Secondary text
-            fg_muted: (92, 99, 112),       // #5c6370 - Comments/muted
-            fg_suggestion: (0, 255, 0),    // Bright green for debugging suggestions
+            fg_primary: (171, 178, 191),    // #abb2bf - Main text
+            fg_secondary: (145, 150, 161),  // #9196a1 - Secondary text
+            fg_muted: (92, 99, 112),        // #5c6370 - Comments/muted
+            fg_suggestion: (128, 128, 128), // Light gray for suggestions
 
             // Accents - OneDark Pro vibrant colors
             accent_blue: (97, 175, 239),     // #61afef - Blue
