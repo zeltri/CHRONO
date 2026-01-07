@@ -175,14 +175,12 @@ pub fn is_file_listing(text: &str) -> bool {
         || text.starts_with('>')
         || text.starts_with('#')
         || text.starts_with('[')
-        || text.contains("  ") // múltiples espacios seguidos (probablemente output formateado)
         || text.len() > 100
-    // nombres muy largos probablemente no son archivos
     {
         return false;
     }
 
-    // Descartar mensajes de error/warning que contengan ':'
+    // Descartar mensajes de error/warning
     if text.to_lowercase().contains("error")
         || text.to_lowercase().contains("warning")
         || text.to_lowercase().contains("failed")
@@ -200,9 +198,16 @@ pub fn is_file_listing(text: &str) -> bool {
     let is_hidden = text.starts_with('.');
 
     // Verificar que solo tenga caracteres válidos para nombres de archivo
-    let valid_filename_chars = text
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-' || c == '/' || c == '~');
+    let valid_filename_chars = text.chars().all(|c| {
+        c.is_alphanumeric()
+            || c == '.'
+            || c == '_'
+            || c == '-'
+            || c == '/'
+            || c == '~'
+            || c == ' '
+            || c == '+'
+    });
 
     if !valid_filename_chars {
         return false;
