@@ -256,7 +256,7 @@ impl CpuRenderer {
     }
 
     /// Obtiene color según tipo de archivo y permisos
-    fn get_file_color(&self, entry: &terminal_core::FileEntry) -> u32 {
+    pub fn get_file_color(&self, entry: &terminal_core::FileEntry) -> u32 {
         use terminal_core::FileType;
 
         match entry.file_type {

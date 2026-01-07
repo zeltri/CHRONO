@@ -1,3 +1,9 @@
+//! ANSI/VT escape sequence parser.
+//!
+//! This crate provides ANSI/VT100/VT220 escape sequence parsing functionality.
+//! It uses the `vte` crate for low-level parsing and translates sequences into
+//! terminal state modifications.
+
 use terminal_core::Screen;
 use vte::Parser;
 

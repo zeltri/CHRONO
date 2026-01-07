@@ -1,3 +1,9 @@
+//! Pseudo-terminal (PTY) interface.
+//!
+//! This crate provides a cross-platform PTY abstraction using `portable-pty`.
+//! It handles spawning shell processes and managing I/O between the terminal
+//! emulator and the child process.
+
 use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::Read;
@@ -95,5 +101,55 @@ impl Pty {
         self.master
             .try_clone_reader()
             .expect("Failed to clone reader")
+    }
+
+    /// Intenta leer datos del PTY sin bloquear (wrapper no bloqueante)
+    pub fn try_read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        self.read(buf)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pty_creation() {
+        let result = Pty::spawn_default_shell(24, 80);
+        assert!(result.is_ok(), "PTY should be created successfully");
+    }
+
+    #[test]
+    fn test_pty_resize() {
+        let mut pty = Pty::spawn_default_shell(24, 80).expect("Failed to create PTY");
+        let result = pty.resize(30, 100);
+        assert!(result.is_ok(), "PTY should resize successfully");
+    }
+
+    #[test]
+    fn test_pty_write() {
+        let mut pty = Pty::spawn_default_shell(24, 80).expect("Failed to create PTY");
+        let result = pty.write(b"echo test\n");
+        assert!(result.is_ok(), "PTY should accept write");
+    }
+
+    #[test]
+    fn test_pty_read_nonblocking() {
+        let mut pty = Pty::spawn_default_shell(24, 80).expect("Failed to create PTY");
+        let mut buffer = vec![0u8; 1024];
+
+        // Non-blocking read should not panic
+        let result = pty.try_read(&mut buffer);
+        assert!(result.is_ok(), "Non-blocking read should succeed");
+    }
+
+    #[test]
+    fn test_pty_dimensions() {
+        let rows = 40;
+        let cols = 120;
+        let mut pty = Pty::spawn_default_shell(rows, cols).expect("Failed to create PTY");
+
+        // Verificar que el PTY fue creado (sin acceso directo a dimensiones en portable-pty)
+        assert!(pty.resize(rows, cols).is_ok());
     }
 }

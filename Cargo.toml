@@ -13,6 +13,11 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Terminal Emulator Team"]
 license = "MIT"
+repository = "https://github.com/yoezequiel/CHRONO"
+readme = "README.md"
+keywords = ["terminal", "emulator", "tui", "ansi", "vt100"]
+categories = ["command-line-utilities"]
+description = "Modern terminal emulator with semantic context awareness"
 
 [workspace.dependencies]
 # Workspace crates
@@ -35,3 +40,7 @@ env_logger = "0.11"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+criterion = "0.5"
+
+[profile.bench]
+debug = true

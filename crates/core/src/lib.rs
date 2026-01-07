@@ -1,3 +1,11 @@
+//! Terminal core library providing screen buffer, cell management, and context analysis.
+//!
+//! This crate contains the fundamental data structures for terminal emulation:
+//! - Screen buffer with grid-based cell storage
+//! - Cell attributes (colors, styles)
+//! - Cursor positioning
+//! - Semantic context detection (errors, warnings, file listings)
+
 pub mod attributes;
 pub mod cell;
 pub mod context;
