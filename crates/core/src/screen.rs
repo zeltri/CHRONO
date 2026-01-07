@@ -3,6 +3,7 @@ use crate::{
     cell::Cell,
     context::{analyze_line_context, LineContext},
     cursor::Cursor,
+    history::CommandHistory,
 };
 
 /// Buffer de pantalla de terminal
@@ -31,6 +32,21 @@ pub struct Screen {
 
     /// Marca si la línea necesita limpieza después de carriage return
     line_needs_clear: Vec<bool>,
+
+    /// Modo de sugerencia activo (para autocompletado)
+    suggestion_mode: bool,
+
+    /// Columna donde inició la sugerencia (para limpieza)
+    suggestion_start_col: usize,
+
+    /// Historial de comandos ejecutados
+    command_history: CommandHistory,
+
+    /// Buffer del comando actual siendo escrito
+    current_command: String,
+
+    /// Sugerencia actual activa (el sufijo que se muestra en gris)
+    active_suggestion: Option<String>,
 }
 
 impl Screen {
@@ -47,6 +63,11 @@ impl Screen {
             max_scrollback: 10_000,
             line_contexts: vec![LineContext::Normal; rows],
             line_needs_clear: vec![false; rows],
+            suggestion_mode: false,
+            suggestion_start_col: 0,
+            command_history: CommandHistory::new(1000),
+            current_command: String::new(),
+            active_suggestion: None,
         }
     }
 
@@ -62,6 +83,12 @@ impl Screen {
         }
 
         if self.cursor.row < self.rows && self.cursor.col < self.cols {
+            // Si no estamos en modo sugerencia pero hay sugerencias visibles,
+            // limpiarlas antes de escribir texto normal
+            if !self.suggestion_mode && self.has_suggestions() {
+                self.clear_suggestions();
+            }
+
             // Si la línea está marcada para limpieza y estamos al principio, limpiarla
             if self.line_needs_clear[self.cursor.row] && self.cursor.col == 0 {
                 // Limpiar esta línea y todas las siguientes que estén marcadas
@@ -81,11 +108,24 @@ impl Screen {
                 }
             }
 
-            let cell = Cell::with_attrs(ch, self.current_attrs);
+            let mut cell = Cell::with_attrs(ch, self.current_attrs);
             let width = cell.width as usize;
+
+            // Si estamos en modo sugerencia, marcar la celda
+            if self.suggestion_mode {
+                cell.is_suggestion = true;
+            }
 
             // Escribir la celda
             self.grid[self.cursor.row][self.cursor.col] = cell;
+
+            // Actualizar buffer de comando si no estamos en modo sugerencia
+            if !self.suggestion_mode && ch.is_ascii() && !ch.is_control() {
+                self.current_command.push(ch);
+
+                // Generar sugerencia automática basada en historial
+                self.update_auto_suggestion();
+            }
 
             // Si el carácter es ancho, marcar las celdas siguientes como continuación
             if width > 1 {
@@ -102,6 +142,16 @@ impl Screen {
 
     /// Line feed - avanza una línea
     pub fn line_feed(&mut self) {
+        // Guardar comando en historial si hay uno activo
+        if !self.current_command.is_empty() {
+            self.command_history
+                .add_command(self.current_command.clone());
+            self.current_command.clear();
+        }
+
+        // Limpiar sugerencia activa
+        self.active_suggestion = None;
+
         // Analizar contexto de la línea actual antes de avanzar
         self.update_line_context(self.cursor.row);
 
@@ -114,6 +164,10 @@ impl Screen {
 
     /// Carriage return - vuelve al inicio de la línea
     pub fn carriage_return(&mut self) {
+        // Resetear comando actual
+        self.current_command.clear();
+        self.active_suggestion = None;
+
         // Si no estamos en la última línea y volvemos al inicio,
         // probablemente es porque se va a escribir nuevo contenido que
         // reemplaza al anterior (como después de un tab completion)
@@ -238,9 +292,130 @@ impl Screen {
         self.line_contexts.resize(new_rows, LineContext::Normal);
         self.line_needs_clear.resize(new_rows, false);
 
-        // Ajustar cursor
-        self.cursor.row = self.cursor.row.min(new_rows.saturating_sub(1));
-        self.cursor.col = self.cursor.col.min(new_cols.saturating_sub(1));
+        // Limitar cursor
+        if self.cursor.row >= new_rows {
+            self.cursor.row = new_rows.saturating_sub(1);
+        }
+        if self.cursor.col >= new_cols {
+            self.cursor.col = new_cols.saturating_sub(1);
+        }
+    }
+
+    /// Activa el modo de sugerencia (texto aparecerá en gris)
+    pub fn start_suggestion(&mut self) {
+        self.suggestion_mode = true;
+        self.suggestion_start_col = self.cursor.col;
+    }
+
+    /// Desactiva el modo de sugerencia
+    pub fn end_suggestion(&mut self) {
+        self.suggestion_mode = false;
+    }
+
+    /// Limpia las sugerencias de la línea actual desde donde empezaron
+    pub fn clear_suggestions(&mut self) {
+        if self.cursor.row < self.rows {
+            for col in self.suggestion_start_col..self.cols {
+                if self.grid[self.cursor.row][col].is_suggestion {
+                    self.grid[self.cursor.row][col] = Cell::empty();
+                } else {
+                    // Si encontramos una celda que no es sugerencia, detenernos
+                    break;
+                }
+            }
+        }
+        self.suggestion_mode = false;
+    }
+
+    /// Verifica si hay sugerencias activas en la línea del cursor
+    pub fn has_suggestions(&self) -> bool {
+        if self.cursor.row < self.rows {
+            self.grid[self.cursor.row]
+                .iter()
+                .any(|cell| cell.is_suggestion)
+        } else {
+            false
+        }
+    }
+
+    /// Actualiza la sugerencia automática basada en el historial
+    fn update_auto_suggestion(&mut self) {
+        // Limpiar sugerencia anterior
+        if self.active_suggestion.is_some() {
+            self.clear_auto_suggestion();
+        }
+
+        // Buscar sugerencia en historial
+        if let Some(suggestion) = self.command_history.find_suggestion(&self.current_command) {
+            // Guardar sugerencia activa
+            self.active_suggestion = Some(suggestion.clone());
+
+            // Mostrar sugerencia en gris
+            let start_col = self.cursor.col;
+            for (i, ch) in suggestion.chars().enumerate() {
+                let col = start_col + i;
+                if col < self.cols {
+                    let mut cell = Cell::as_suggestion(ch);
+                    cell.attrs = self.current_attrs;
+                    self.grid[self.cursor.row][col] = cell;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Limpia la sugerencia automática actual
+    fn clear_auto_suggestion(&mut self) {
+        if let Some(suggestion) = &self.active_suggestion {
+            let start_col = self.cursor.col;
+            for i in 0..suggestion.len() {
+                let col = start_col + i;
+                if col < self.cols && self.grid[self.cursor.row][col].is_suggestion {
+                    self.grid[self.cursor.row][col] = Cell::empty();
+                }
+            }
+            self.active_suggestion = None;
+        }
+    }
+
+    /// Acepta la sugerencia actual (llamar cuando el usuario presiona Tab o →)
+    pub fn accept_suggestion(&mut self) {
+        if let Some(suggestion) = &self.active_suggestion {
+            // Agregar la sugerencia al comando actual
+            self.current_command.push_str(suggestion);
+
+            // Convertir las celdas de sugerencia a texto normal
+            let start_col = self.cursor.col;
+            for (i, ch) in suggestion.chars().enumerate() {
+                let col = start_col + i;
+                if col < self.cols {
+                    let mut cell = Cell::with_attrs(ch, self.current_attrs);
+                    cell.is_suggestion = false;
+                    self.grid[self.cursor.row][col] = cell;
+                }
+            }
+
+            // Mover cursor al final de la sugerencia
+            self.cursor.col += suggestion.len();
+
+            // Limpiar sugerencia activa
+            self.active_suggestion = None;
+        }
+    }
+
+    /// Obtiene la sugerencia actual activa
+    pub fn get_active_suggestion(&self) -> Option<&str> {
+        self.active_suggestion.as_deref()
+    }
+
+    /// Maneja el backspace eliminando el último carácter del comando actual
+    pub fn handle_backspace(&mut self) {
+        if !self.current_command.is_empty() {
+            self.current_command.pop();
+            // Actualizar sugerencia
+            self.update_auto_suggestion();
+        }
     }
 
     /// Mueve el cursor a una posición específica

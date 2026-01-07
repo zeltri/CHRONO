@@ -10,6 +10,7 @@ pub mod attributes;
 pub mod cell;
 pub mod context;
 pub mod cursor;
+pub mod history;
 pub mod screen;
 
 #[cfg(test)]
@@ -23,4 +24,5 @@ pub use context::{
     LineContext,
 };
 pub use cursor::Cursor;
+pub use history::CommandHistory;
 pub use screen::Screen;

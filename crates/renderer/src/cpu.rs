@@ -122,7 +122,10 @@ impl CpuRenderer {
 
                 // Renderizar el carácter con color contextual
                 if cell.character != ' ' {
-                    let fg = if is_link {
+                    let fg = if cell.is_suggestion {
+                        // Sugerencias de autocompletado en gris claro
+                        self.theme.fg_suggestion_u32()
+                    } else if is_link {
                         self.theme.accent_blue_u32() // Enlaces en azul moderno
                     } else if is_file_entry {
                         // Colorear según tipo de archivo

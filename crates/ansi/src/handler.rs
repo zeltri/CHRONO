@@ -23,6 +23,7 @@ impl<'a> Perform for AnsiHandler<'a> {
                 // Backspace
                 if self.screen.cursor.col > 0 {
                     self.screen.cursor.col -= 1;
+                    self.screen.handle_backspace();
                 }
             }
             0x09 => {
@@ -257,6 +258,15 @@ impl<'a> AnsiHandler<'a> {
                 // Bright background colors
                 100..=107 => {
                     self.screen.current_attrs.bg_color = Color::Indexed((n - 100 + 8) as u8);
+                }
+                // Custom: Suggestion mode control
+                53 => {
+                    // Start suggestion mode (custom extension)
+                    self.screen.start_suggestion();
+                }
+                54 => {
+                    // End suggestion mode (custom extension)
+                    self.screen.end_suggestion();
                 }
                 _ => {
                     log::trace!("SGR no implementado: {}", n);

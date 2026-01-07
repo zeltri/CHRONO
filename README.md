@@ -22,6 +22,7 @@ CHRONO es un emulador de terminal construido desde cero en Rust, diseñado para 
 -   🎯 **Stack Traces Navegables** - Click para abrir archivos en tu editor
 -   🌈 **Full ANSI Support** - Colores 24-bit, estilos y secuencias VT
 -   📦 **Arquitectura Modular** - Crates independientes y testeables
+-   💡 **Smart Suggestions** - Autocompletado visual en gris claro (Fish/Zsh style)
 
 ---
 
@@ -48,6 +49,21 @@ CHRONO es un emulador de terminal construido desde cero en Rust, diseñado para 
 -   ✅ **Teclado Completo** - Teclas especiales, modificadores, funciones F1-F12
 -   ✅ **Clipboard Integration** - Copy/paste con `Ctrl+Shift+C/V`
 -   ✅ **Shortcuts** - `Ctrl+C`, `Ctrl+D`, `Ctrl+L`, etc.
+
+#### Smart Features (NEW! ⭐)
+
+-   ✅ **Autocompletado Visual** - Sugerencias en gris claro al estilo Fish/Zsh
+    -   🔹 Secuencias ANSI personalizadas (ESC[53m/54m)
+    -   🔹 Limpieza automática al escribir
+    -   🔹 Color gris sutil y configurable
+    -   🔹 API pública completa en Rust
+    -   📖 [Ver guía completa](SUGGESTIONS_GUIDE.md)
+-   ✅ **Sugerencias Inteligentes de Historial** - Como Kitty Terminal 🆕
+    -   🔹 Busca automáticamente en comandos previos
+    -   🔹 Sugiere basándose en primeras letras
+    -   🔹 Acepta con Tab o flecha derecha
+    -   🔹 Actualización en tiempo real
+    -   📖 [Ver documentación](HISTORIAL_SUGGESTIONS.md)
 
 #### Smart Features
 

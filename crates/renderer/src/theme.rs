@@ -6,9 +6,10 @@ pub struct ModernTheme {
     pub bg_highlight: (u8, u8, u8), // Hover/selection
 
     // Foreground colors
-    pub fg_primary: (u8, u8, u8),   // Main text
-    pub fg_secondary: (u8, u8, u8), // Secondary text
-    pub fg_muted: (u8, u8, u8),     // Muted text
+    pub fg_primary: (u8, u8, u8),    // Main text
+    pub fg_secondary: (u8, u8, u8),  // Secondary text
+    pub fg_muted: (u8, u8, u8),      // Muted text
+    pub fg_suggestion: (u8, u8, u8), // Suggestion/autocomplete text (grayish)
 
     // Accent colors
     pub accent_blue: (u8, u8, u8),    // Links, info
@@ -35,6 +36,7 @@ impl Default for ModernTheme {
             fg_primary: (171, 178, 191),   // #abb2bf - Main text
             fg_secondary: (145, 150, 161), // #9196a1 - Secondary text
             fg_muted: (92, 99, 112),       // #5c6370 - Comments/muted
+            fg_suggestion: (75, 82, 95),   // #4b525f - Light gray for suggestions
 
             // Accents - OneDark Pro vibrant colors
             accent_blue: (97, 175, 239),     // #61afef - Blue
@@ -130,6 +132,14 @@ impl ModernTheme {
             self.accent_orange.0,
             self.accent_orange.1,
             self.accent_orange.2,
+        )
+    }
+
+    pub fn fg_suggestion_u32(&self) -> u32 {
+        Self::rgb_to_u32(
+            self.fg_suggestion.0,
+            self.fg_suggestion.1,
+            self.fg_suggestion.2,
         )
     }
 }

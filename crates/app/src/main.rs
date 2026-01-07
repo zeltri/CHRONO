@@ -169,6 +169,26 @@ fn main() -> Result<()> {
                         },
                     ..
                 } => {
+                    // Tab para aceptar sugerencia
+                    if key_code == KeyCode::Tab {
+                        let mut screen_guard = screen.lock().unwrap();
+                        if screen_guard.get_active_suggestion().is_some() {
+                            screen_guard.accept_suggestion();
+                            window.request_redraw();
+                            return;
+                        }
+                    }
+
+                    // Flecha derecha para aceptar sugerencia
+                    if key_code == KeyCode::ArrowRight {
+                        let mut screen_guard = screen.lock().unwrap();
+                        if screen_guard.get_active_suggestion().is_some() {
+                            screen_guard.accept_suggestion();
+                            window.request_redraw();
+                            return;
+                        }
+                    }
+
                     // Ctrl+Shift+V para pegar
                     if key_code == KeyCode::KeyV
                         && modifiers_state.control_key()
