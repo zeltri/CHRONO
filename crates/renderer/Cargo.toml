@@ -1,0 +1,11 @@
+[package]
+name = "terminal-renderer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+terminal-core.workspace = true
+fontdue.workspace = true
+log.workspace = true

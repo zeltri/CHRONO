@@ -1,0 +1,11 @@
+[package]
+name = "terminal-ansi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+terminal-core.workspace = true
+vte.workspace = true
+log.workspace = true

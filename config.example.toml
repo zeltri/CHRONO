@@ -1,0 +1,18 @@
+# Terminal Emulator - Configuración de ejemplo
+
+[terminal]
+# Número de líneas en el scrollback
+scrollback_lines = 10000
+
+[font]
+# Tamaño de fuente en píxeles
+size = 16
+
+[colors]
+# Colores por defecto (paleta básica)
+foreground = [229, 229, 229]
+background = [0, 0, 0]
+
+[shell]
+# Shell por defecto (vacío = usar $SHELL o /bin/bash)
+command = ""

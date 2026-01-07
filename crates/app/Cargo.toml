@@ -1,0 +1,28 @@
+[package]
+name = "terminal-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "terminal"
+path = "src/main.rs"
+
+[dependencies]
+terminal-core.workspace = true
+terminal-ansi.workspace = true
+terminal-pty.workspace = true
+terminal-renderer.workspace = true
+
+winit.workspace = true
+arboard.workspace = true
+dirs.workspace = true
+log.workspace = true
+env_logger.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+toml.workspace = true
+
+[dependencies.softbuffer]
+version = "0.4"

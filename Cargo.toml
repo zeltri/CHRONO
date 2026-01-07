@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/ansi",
+    "crates/pty",
+    "crates/renderer",
+    "crates/app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Terminal Emulator Team"]
+license = "MIT"
+
+[workspace.dependencies]
+# Workspace crates
+terminal-core = { path = "crates/core" }
+terminal-ansi = { path = "crates/ansi" }
+terminal-pty = { path = "crates/pty" }
+terminal-renderer = { path = "crates/renderer" }
+
+# External dependencies
+portable-pty = "0.8"
+vte = "0.13"
+winit = "0.29"
+wgpu = "0.19"
+unicode-width = "0.1"
+fontdue = "0.9"
+arboard = "3.4"
+dirs = "5.0"
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
