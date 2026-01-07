@@ -255,16 +255,19 @@ pub fn parse_file_entry(text: &str) -> Option<FileEntry> {
 
 /// Parsea formato simple de listado (solo nombres)
 fn parse_simple_file_entry(text: &str) -> Option<FileEntry> {
-    let text = text.trim();
-    if text.is_empty() {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
         return None;
     }
 
+    // Calcular el offset inicial (espacios antes del nombre)
+    let start_col = text.len() - text.trim_start().len();
+
     // Detectar directorios por el sufijo /
-    let (name, is_dir) = if text.ends_with('/') {
-        (text.trim_end_matches('/'), true)
+    let (name, is_dir) = if trimmed.ends_with('/') {
+        (trimmed.trim_end_matches('/'), true)
     } else {
-        (text, false)
+        (trimmed, false)
     };
 
     // Si no tiene extensión y no termina en /, asumir que es un directorio
@@ -293,8 +296,8 @@ fn parse_simple_file_entry(text: &str) -> Option<FileEntry> {
         name: name.to_string(),
         file_type,
         is_executable,
-        start_col: 0,
-        end_col: name.len(), // Usar name.len() en lugar de text.len()
+        start_col,
+        end_col: start_col + name.len(),
     })
 }
 
