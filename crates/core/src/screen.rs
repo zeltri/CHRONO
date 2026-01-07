@@ -1,4 +1,9 @@
-use crate::{attributes::CellAttributes, cell::Cell, cursor::Cursor, context::{LineContext, analyze_line_context}};
+use crate::{
+    attributes::CellAttributes,
+    cell::Cell,
+    context::{analyze_line_context, LineContext},
+    cursor::Cursor,
+};
 
 /// Buffer de pantalla de terminal
 pub struct Screen {
@@ -20,7 +25,7 @@ pub struct Screen {
 
     /// Máximo de líneas en scrollback
     max_scrollback: usize,
-    
+
     /// Contexto semántico por línea
     pub line_contexts: Vec<LineContext>,
 }
@@ -76,7 +81,7 @@ impl Screen {
     pub fn line_feed(&mut self) {
         // Analizar contexto de la línea actual antes de avanzar
         self.update_line_context(self.cursor.row);
-        
+
         if self.cursor.row < self.rows - 1 {
             self.cursor.row += 1;
         } else {
@@ -138,24 +143,24 @@ impl Screen {
     pub fn get_visible(&self) -> &Vec<Vec<Cell>> {
         &self.grid
     }
-    
+
     /// Actualiza el contexto de una línea analizando su contenido
     pub fn update_line_context(&mut self, row: usize) {
         if row >= self.rows {
             return;
         }
-        
-        let line_text: String = self.grid[row]
-            .iter()
-            .map(|c| c.character)
-            .collect();
-        
+
+        let line_text: String = self.grid[row].iter().map(|c| c.character).collect();
+
         self.line_contexts[row] = analyze_line_context(&line_text);
     }
-    
+
     /// Obtiene el contexto de una línea
     pub fn get_line_context(&self, row: usize) -> LineContext {
-        self.line_contexts.get(row).copied().unwrap_or(LineContext::Normal)
+        self.line_contexts
+            .get(row)
+            .copied()
+            .unwrap_or(LineContext::Normal)
     }
 
     /// Redimensiona la pantalla
@@ -178,7 +183,7 @@ impl Screen {
 
         self.rows = new_rows;
         self.cols = new_cols;
-        
+
         // Ajustar contextos de línea
         self.line_contexts.resize(new_rows, LineContext::Normal);
 

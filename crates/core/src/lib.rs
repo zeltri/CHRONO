@@ -9,6 +9,6 @@ mod tests;
 
 pub use attributes::{CellAttributes, Color};
 pub use cell::Cell;
-pub use context::{LineContext, FileReference, analyze_line_context, extract_file_references};
+pub use context::{analyze_line_context, extract_file_references, FileReference, LineContext};
 pub use cursor::Cursor;
 pub use screen::Screen;

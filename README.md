@@ -66,7 +66,7 @@ cargo test -- --nocapture
 
 ### Cobertura de Tests
 
--   **terminal-core**: 10 tests (Screen, Cell, Cursor, Scrollback)
+-   **terminal-core**: 15 tests (Screen, Cell, Cursor, Scrollback, Context detection)
 -   **terminal-ansi**: 10 tests (Parser ANSI, SGR, Colores, Movimiento)
 
 ## Desarrollo

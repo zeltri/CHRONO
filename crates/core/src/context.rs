@@ -16,8 +16,8 @@ pub struct FileReference {
     pub path: String,
     pub line: Option<usize>,
     pub col: Option<usize>,
-    pub start_col: usize,  // Posición en la línea donde empieza la referencia
-    pub end_col: usize,    // Posición donde termina
+    pub start_col: usize, // Posición en la línea donde empieza la referencia
+    pub end_col: usize,   // Posición donde termina
 }
 
 /// Patrones para detección de contexto
@@ -65,21 +65,21 @@ pub fn analyze_line_context(text: &str) -> LineContext {
     if has_file_reference(text) {
         return LineContext::StackTrace;
     }
-    
+
     // Luego verificar errores
     for pattern in ERROR_PATTERNS.iter() {
         if pattern.is_match(text) {
             return LineContext::Error;
         }
     }
-    
+
     // Luego warnings
     for pattern in WARNING_PATTERNS.iter() {
         if pattern.is_match(text) {
             return LineContext::Warning;
         }
     }
-    
+
     LineContext::Normal
 }
 
@@ -92,22 +92,22 @@ pub fn has_file_reference(text: &str) -> bool {
 pub fn extract_file_references(text: &str) -> Vec<FileReference> {
     let mut references = Vec::new();
     let mut seen_positions = std::collections::HashSet::new();
-    
+
     for pattern in FILE_PATTERNS.iter() {
         for cap in pattern.captures_iter(text) {
             if let Some(path_match) = cap.get(1) {
                 let start = path_match.start();
-                
+
                 // Evitar duplicados en la misma posición
                 if seen_positions.contains(&start) {
                     continue;
                 }
                 seen_positions.insert(start);
-                
+
                 let path = path_match.as_str().to_string();
                 let line = cap.get(2).and_then(|m| m.as_str().parse().ok());
                 let col = cap.get(3).and_then(|m| m.as_str().parse().ok());
-                
+
                 references.push(FileReference {
                     path,
                     line,
@@ -118,27 +118,42 @@ pub fn extract_file_references(text: &str) -> Vec<FileReference> {
             }
         }
     }
-    
+
     references
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_error_detection() {
-        assert_eq!(analyze_line_context("Error: file not found"), LineContext::Error);
-        assert_eq!(analyze_line_context("FATAL: connection failed"), LineContext::Error);
-        assert_eq!(analyze_line_context("thread panicked at main.rs:42"), LineContext::StackTrace);
+        assert_eq!(
+            analyze_line_context("Error: file not found"),
+            LineContext::Error
+        );
+        assert_eq!(
+            analyze_line_context("FATAL: connection failed"),
+            LineContext::Error
+        );
+        assert_eq!(
+            analyze_line_context("thread panicked at main.rs:42"),
+            LineContext::StackTrace
+        );
     }
-    
+
     #[test]
     fn test_warning_detection() {
-        assert_eq!(analyze_line_context("Warning: deprecated function"), LineContext::Warning);
-        assert_eq!(analyze_line_context("WARN: low memory"), LineContext::Warning);
+        assert_eq!(
+            analyze_line_context("Warning: deprecated function"),
+            LineContext::Warning
+        );
+        assert_eq!(
+            analyze_line_context("WARN: low memory"),
+            LineContext::Warning
+        );
     }
-    
+
     #[test]
     fn test_file_reference_rust() {
         let refs = extract_file_references("at src/main.rs:42:10");
@@ -147,7 +162,7 @@ mod tests {
         assert_eq!(refs[0].line, Some(42));
         assert_eq!(refs[0].col, Some(10));
     }
-    
+
     #[test]
     fn test_file_reference_python() {
         let refs = extract_file_references(r#"File "/home/user/test.py", line 123"#);
@@ -155,7 +170,7 @@ mod tests {
         assert_eq!(refs[0].path, "/home/user/test.py");
         assert_eq!(refs[0].line, Some(123));
     }
-    
+
     #[test]
     fn test_stack_trace_detection() {
         let line = "    at /home/user/project/src/lib.rs:156:9";

@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use winit::{
-    event::{Event, KeyEvent, WindowEvent, ElementState, MouseButton},
+    event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     keyboard::{KeyCode, ModifiersState, PhysicalKey},
-    window::{WindowBuilder, CursorIcon},
+    window::{CursorIcon, WindowBuilder},
 };
 
 use terminal_ansi::AnsiParser;
@@ -111,7 +111,7 @@ fn main() -> Result<()> {
                 WindowEvent::CursorMoved { position, .. } => {
                     let screen_guard = screen.lock().unwrap();
                     renderer.check_file_hover(&screen_guard, position.x, position.y);
-                    
+
                     // Cambiar cursor si está sobre un enlace
                     if renderer.hovered_file.is_some() {
                         window.set_cursor_icon(CursorIcon::Pointer);
@@ -119,14 +119,14 @@ fn main() -> Result<()> {
                         window.set_cursor_icon(CursorIcon::Text);
                     }
                 }
-                WindowEvent::MouseInput { 
-                    state: ElementState::Pressed, 
-                    button: MouseButton::Left, 
-                    .. 
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
                 } => {
                     if let Some((row, path, line)) = &renderer.hovered_file {
                         log::info!("Click on file: {} at line {:?} (row {})", path, line, row);
-                        
+
                         // Intentar abrir el archivo en VS Code
                         let _ = if let Some(line_num) = line {
                             std::process::Command::new("code")
@@ -134,9 +134,7 @@ fn main() -> Result<()> {
                                 .arg(format!("{}:{}", path, line_num))
                                 .spawn()
                         } else {
-                            std::process::Command::new("code")
-                                .arg(path)
-                                .spawn()
+                            std::process::Command::new("code").arg(path).spawn()
                         };
                     }
                 }

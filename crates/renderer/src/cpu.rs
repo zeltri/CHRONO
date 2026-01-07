@@ -1,5 +1,5 @@
 use fontdue::{Font, FontSettings};
-use terminal_core::{Screen, LineContext, extract_file_references};
+use terminal_core::{extract_file_references, LineContext, Screen};
 
 /// Renderer CPU básico que convierte la pantalla a un buffer de píxeles
 pub struct CpuRenderer {
@@ -77,7 +77,7 @@ impl CpuRenderer {
         for (row_idx, row) in grid.iter().enumerate() {
             // Obtener contexto de la línea
             let line_context = screen.get_line_context(row_idx);
-            
+
             // Extraer referencias a archivos si es un stack trace
             let file_refs = if line_context == LineContext::StackTrace {
                 let line_text: String = row.iter().map(|c| c.character).collect();
@@ -85,14 +85,16 @@ impl CpuRenderer {
             } else {
                 Vec::new()
             };
-            
+
             for (col_idx, cell) in row.iter().enumerate() {
                 let x = col_idx as u32 * self.char_width;
                 let y = row_idx as u32 * self.char_height;
 
                 // Determinar si esta celda es parte de un enlace
-                let is_link = !file_refs.is_empty() && 
-                    file_refs.iter().any(|f| col_idx >= f.start_col && col_idx < f.end_col);
+                let is_link = !file_refs.is_empty()
+                    && file_refs
+                        .iter()
+                        .any(|f| col_idx >= f.start_col && col_idx < f.end_col);
 
                 // Renderizar fondo de celda
                 let bg = self.color_to_u32(cell.attrs.bg_color);
@@ -107,7 +109,7 @@ impl CpuRenderer {
                     };
                     self.render_char(buffer, cell.character, x, y, fg);
                 }
-                
+
                 // Subrayar enlaces
                 if is_link {
                     let fg = self.rgb_to_u32(100, 180, 255);
@@ -200,7 +202,7 @@ impl CpuRenderer {
         self.width = width;
         self.height = height;
     }
-    
+
     /// Obtiene color basado en el contexto de la línea
     fn get_context_color(&self, cell: &terminal_core::Cell, context: LineContext) -> u32 {
         match context {
@@ -210,7 +212,7 @@ impl CpuRenderer {
             LineContext::Normal => self.color_to_u32(cell.attrs.fg_color),
         }
     }
-    
+
     /// Dibuja un subrayado
     fn draw_underline(&self, buffer: &mut [u32], x: u32, y: u32, w: u32, h: u32, color: u32) {
         let underline_y = (y + h - 2) as usize;
@@ -222,32 +224,32 @@ impl CpuRenderer {
             }
         }
     }
-    
+
     /// Convierte RGB a u32
     fn rgb_to_u32(&self, r: u8, g: u8, b: u8) -> u32 {
         0xFF000000 | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
     }
-    
+
     /// Detecta si el cursor está sobre un enlace de archivo
     pub fn check_file_hover(&mut self, screen: &Screen, mouse_x: f64, mouse_y: f64) {
         let col = (mouse_x / self.char_width as f64) as usize;
         let row = (mouse_y / self.char_height as f64) as usize;
-        
+
         if row >= screen.rows {
             self.hovered_file = None;
             return;
         }
-        
+
         let line_text: String = screen.grid[row].iter().map(|c| c.character).collect();
         let file_refs = extract_file_references(&line_text);
-        
+
         for file_ref in file_refs {
             if col >= file_ref.start_col && col < file_ref.end_col {
                 self.hovered_file = Some((row, file_ref.path.clone(), file_ref.line));
                 return;
             }
         }
-        
+
         self.hovered_file = None;
     }
 }
