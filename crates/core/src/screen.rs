@@ -160,6 +160,10 @@ impl Screen {
         } else {
             self.scroll_up(1);
         }
+
+        // Restablecer atributos después del line feed para evitar que
+        // los colores del output anterior afecten el nuevo prompt
+        self.current_attrs = CellAttributes::default();
     }
 
     /// Carriage return - vuelve al inicio de la línea
@@ -167,6 +171,10 @@ impl Screen {
         // Resetear comando actual
         self.current_command.clear();
         self.active_suggestion = None;
+
+        // Restablecer atributos de color para evitar que los colores del prompt
+        // persistan en el texto del usuario
+        self.current_attrs = CellAttributes::default();
 
         // Si no estamos en la última línea y volvemos al inicio,
         // probablemente es porque se va a escribir nuevo contenido que
@@ -207,6 +215,8 @@ impl Screen {
                 *cell = Cell::empty();
             }
         }
+        // Restablecer los atributos actuales al limpiar la pantalla
+        self.current_attrs = CellAttributes::default();
     }
 
     /// Limpia desde el cursor hasta el final de la línea
