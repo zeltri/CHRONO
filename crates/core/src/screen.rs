@@ -28,6 +28,9 @@ pub struct Screen {
 
     /// Contexto semántico por línea
     pub line_contexts: Vec<LineContext>,
+
+    /// Marca si la línea necesita limpieza después de carriage return
+    line_needs_clear: Vec<bool>,
 }
 
 impl Screen {
@@ -43,6 +46,7 @@ impl Screen {
             current_attrs: CellAttributes::default(),
             max_scrollback: 10_000,
             line_contexts: vec![LineContext::Normal; rows],
+            line_needs_clear: vec![false; rows],
         }
     }
 
@@ -58,6 +62,25 @@ impl Screen {
         }
 
         if self.cursor.row < self.rows && self.cursor.col < self.cols {
+            // Si la línea está marcada para limpieza y estamos al principio, limpiarla
+            if self.line_needs_clear[self.cursor.row] && self.cursor.col == 0 {
+                // Limpiar esta línea y todas las siguientes que estén marcadas
+                self.clear_line();
+                self.line_needs_clear[self.cursor.row] = false;
+
+                // Limpiar líneas consecutivas marcadas
+                for row in (self.cursor.row + 1)..self.rows {
+                    if self.line_needs_clear[row] {
+                        for col in 0..self.cols {
+                            self.grid[row][col] = Cell::empty();
+                        }
+                        self.line_needs_clear[row] = false;
+                    } else {
+                        break; // Dejar de limpiar si encontramos una línea no marcada
+                    }
+                }
+            }
+
             let cell = Cell::with_attrs(ch, self.current_attrs);
             let width = cell.width as usize;
 
@@ -91,6 +114,17 @@ impl Screen {
 
     /// Carriage return - vuelve al inicio de la línea
     pub fn carriage_return(&mut self) {
+        // Si no estamos en la última línea y volvemos al inicio,
+        // probablemente es porque se va a escribir nuevo contenido que
+        // reemplaza al anterior (como después de un tab completion)
+        if self.cursor.row < self.rows && self.cursor.col > 0 {
+            // Marcar esta línea y todas las siguientes para limpieza
+            for row in self.cursor.row..self.rows {
+                if row < self.line_needs_clear.len() {
+                    self.line_needs_clear[row] = true;
+                }
+            }
+        }
         self.cursor.col = 0;
     }
 
@@ -135,6 +169,22 @@ impl Screen {
         if self.cursor.row < self.rows {
             for col in 0..self.cols {
                 self.grid[self.cursor.row][col] = Cell::empty();
+            }
+        }
+    }
+
+    /// Limpia desde la línea actual hasta el final de la pantalla
+    pub fn clear_to_end_of_screen(&mut self) {
+        // Limpiar desde cursor hasta final de la línea actual
+        self.clear_line_right();
+
+        // Limpiar todas las líneas siguientes
+        for row in (self.cursor.row + 1)..self.rows {
+            for col in 0..self.cols {
+                self.grid[row][col] = Cell::empty();
+            }
+            if row < self.line_needs_clear.len() {
+                self.line_needs_clear[row] = false;
             }
         }
     }
@@ -184,8 +234,9 @@ impl Screen {
         self.rows = new_rows;
         self.cols = new_cols;
 
-        // Ajustar contextos de línea
+        // Ajustar contextos de línea y flags
         self.line_contexts.resize(new_rows, LineContext::Normal);
+        self.line_needs_clear.resize(new_rows, false);
 
         // Ajustar cursor
         self.cursor.row = self.cursor.row.min(new_rows.saturating_sub(1));

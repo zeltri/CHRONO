@@ -1,6 +1,6 @@
 use crate::ModernTheme;
 use fontdue::{Font, FontSettings};
-use terminal_core::{extract_file_references, LineContext, Screen};
+use terminal_core::{extract_file_references, parse_file_entry, LineContext, Screen};
 
 /// Renderer CPU moderno con tema oscuro innovador
 pub struct CpuRenderer {
@@ -93,6 +93,14 @@ impl CpuRenderer {
                 Vec::new()
             };
 
+            // Parsear entrada de archivo si es un listado
+            let file_entry = if line_context == LineContext::FileList {
+                let line_text: String = row.iter().map(|c| c.character).collect();
+                parse_file_entry(&line_text)
+            } else {
+                None
+            };
+
             for (col_idx, cell) in row.iter().enumerate() {
                 let x = col_idx as u32 * self.char_width;
                 let y = row_idx as u32 * self.char_height;
@@ -103,6 +111,11 @@ impl CpuRenderer {
                         .iter()
                         .any(|f| col_idx >= f.start_col && col_idx < f.end_col);
 
+                // Determinar si esta celda es parte de un archivo listado
+                let is_file_entry = file_entry.as_ref().map_or(false, |entry| {
+                    col_idx >= entry.start_col && col_idx < entry.end_col
+                });
+
                 // Renderizar fondo de celda
                 let bg = self.color_to_u32(cell.attrs.bg_color);
                 self.fill_rect(buffer, x, y, self.char_width, self.char_height, bg);
@@ -111,6 +124,9 @@ impl CpuRenderer {
                 if cell.character != ' ' {
                     let fg = if is_link {
                         self.theme.accent_blue_u32() // Enlaces en azul moderno
+                    } else if is_file_entry {
+                        // Colorear según tipo de archivo
+                        self.get_file_color(file_entry.as_ref().unwrap())
                     } else {
                         self.get_context_color(cell, line_context)
                     };
@@ -234,7 +250,28 @@ impl CpuRenderer {
             LineContext::Error => self.theme.accent_red_u32(),
             LineContext::Warning => self.theme.accent_yellow_u32(),
             LineContext::StackTrace => self.theme.accent_cyan_u32(),
+            LineContext::FileList => self.theme.fg_primary_u32(), // Default, se sobrescribe por get_file_color
             LineContext::Normal => self.color_to_u32(cell.attrs.fg_color),
+        }
+    }
+
+    /// Obtiene color según tipo de archivo y permisos
+    fn get_file_color(&self, entry: &terminal_core::FileEntry) -> u32 {
+        use terminal_core::FileType;
+
+        match entry.file_type {
+            FileType::Directory => self.theme.accent_blue_u32(),
+            FileType::Executable if entry.is_executable => self.theme.accent_green_u32(),
+            FileType::SymbolicLink => self.theme.accent_cyan_u32(),
+            FileType::Archive => self.theme.accent_red_u32(),
+            FileType::Image => self.theme.accent_magenta_u32(),
+            FileType::Video => self.theme.accent_magenta_u32(),
+            FileType::Audio => self.theme.accent_cyan_u32(),
+            FileType::Document => self.theme.accent_yellow_u32(),
+            FileType::Code => self.theme.accent_green_u32(),
+            FileType::RegularFile if entry.is_executable => self.theme.accent_green_u32(),
+            FileType::RegularFile => self.theme.fg_primary_u32(),
+            _ => self.theme.fg_primary_u32(),
         }
     }
 

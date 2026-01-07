@@ -1,4 +1,4 @@
-/// Modern color palette inspired by Tokyo Night and GitHub Dark
+/// OneDark Pro inspired color palette
 pub struct ModernTheme {
     // Background colors
     pub bg_primary: (u8, u8, u8),   // Main background
@@ -26,45 +26,45 @@ pub struct ModernTheme {
 impl Default for ModernTheme {
     fn default() -> Self {
         Self {
-            // Backgrounds - Dark with subtle purple tint
-            bg_primary: (26, 27, 38),   // #1a1b26
-            bg_secondary: (30, 32, 44), // #1e202c
-            bg_highlight: (42, 45, 60), // #2a2d3c
+            // Backgrounds - OneDark Pro style
+            bg_primary: (40, 44, 52),   // #282c34 - Main background
+            bg_secondary: (33, 37, 43), // #21252b - Darker
+            bg_highlight: (57, 63, 74), // #393f4a - Selection/hover
 
-            // Foreground - Soft whites and grays
-            fg_primary: (192, 202, 245),   // #c0caf5 - Bright white-blue
-            fg_secondary: (169, 177, 214), // #a9b1d6 - Soft gray-blue
-            fg_muted: (118, 124, 155),     // #767c9b - Muted gray
+            // Foreground - OneDark Pro text colors
+            fg_primary: (171, 178, 191),   // #abb2bf - Main text
+            fg_secondary: (145, 150, 161), // #9196a1 - Secondary text
+            fg_muted: (92, 99, 112),       // #5c6370 - Comments/muted
 
-            // Accents - Vibrant but refined
-            accent_blue: (122, 162, 247),    // #7aa2f7 - Bright blue
-            accent_cyan: (125, 207, 255),    // #7dcfff - Cyan
-            accent_green: (158, 206, 106),   // #9ece6a - Green
-            accent_yellow: (224, 175, 104),  // #e0af68 - Yellow/orange
-            accent_red: (247, 118, 142),     // #f7768e - Red/pink
-            accent_magenta: (187, 154, 247), // #bb9af7 - Purple
-            accent_orange: (255, 158, 100),  // #ff9e64 - Orange
+            // Accents - OneDark Pro vibrant colors
+            accent_blue: (97, 175, 239),     // #61afef - Blue
+            accent_cyan: (86, 182, 194),     // #56b6c2 - Cyan
+            accent_green: (152, 195, 121),   // #98c379 - Green
+            accent_yellow: (229, 192, 123),  // #e5c07b - Yellow
+            accent_red: (224, 108, 117),     // #e06c75 - Red
+            accent_magenta: (198, 120, 221), // #c678dd - Purple/Magenta
+            accent_orange: (209, 154, 102),  // #d19a66 - Orange
 
-            // ANSI colors (0-15)
+            // ANSI colors (0-15) - OneDark Pro palette
             ansi_colors: [
                 // Dark variants (0-7)
-                (26, 27, 38),    // 0: Black
-                (247, 118, 142), // 1: Red
-                (158, 206, 106), // 2: Green
-                (224, 175, 104), // 3: Yellow
-                (122, 162, 247), // 4: Blue
-                (187, 154, 247), // 5: Magenta
-                (125, 207, 255), // 6: Cyan
-                (192, 202, 245), // 7: White
+                (40, 44, 52),    // 0: Black
+                (224, 108, 117), // 1: Red
+                (152, 195, 121), // 2: Green
+                (229, 192, 123), // 3: Yellow
+                (97, 175, 239),  // 4: Blue
+                (198, 120, 221), // 5: Magenta
+                (86, 182, 194),  // 6: Cyan
+                (171, 178, 191), // 7: White
                 // Bright variants (8-15)
-                (86, 95, 137),   // 8: Bright Black (gray)
-                (255, 135, 157), // 9: Bright Red
-                (182, 227, 133), // 10: Bright Green
-                (241, 200, 135), // 11: Bright Yellow
-                (142, 182, 255), // 12: Bright Blue
-                (207, 184, 255), // 13: Bright Magenta
-                (154, 227, 255), // 14: Bright Cyan
-                (220, 228, 255), // 15: Bright White
+                (92, 99, 112),   // 8: Bright Black (gray/comments)
+                (240, 128, 137), // 9: Bright Red
+                (172, 215, 141), // 10: Bright Green
+                (245, 212, 143), // 11: Bright Yellow
+                (117, 195, 255), // 12: Bright Blue
+                (218, 140, 241), // 13: Bright Magenta
+                (106, 202, 214), // 14: Bright Cyan
+                (200, 207, 220), // 15: Bright White
             ],
         }
     }
@@ -106,6 +106,30 @@ impl ModernTheme {
             self.accent_yellow.0,
             self.accent_yellow.1,
             self.accent_yellow.2,
+        )
+    }
+
+    pub fn accent_green_u32(&self) -> u32 {
+        Self::rgb_to_u32(
+            self.accent_green.0,
+            self.accent_green.1,
+            self.accent_green.2,
+        )
+    }
+
+    pub fn accent_magenta_u32(&self) -> u32 {
+        Self::rgb_to_u32(
+            self.accent_magenta.0,
+            self.accent_magenta.1,
+            self.accent_magenta.2,
+        )
+    }
+
+    pub fn accent_orange_u32(&self) -> u32 {
+        Self::rgb_to_u32(
+            self.accent_orange.0,
+            self.accent_orange.1,
+            self.accent_orange.2,
         )
     }
 }
