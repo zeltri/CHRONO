@@ -45,6 +45,9 @@ pub struct Screen {
     /// Buffer del comando actual siendo escrito
     current_command: String,
 
+    /// Columna donde inició el comando actual
+    command_start_col: usize,
+
     /// Sugerencia actual activa (el sufijo que se muestra en gris)
     active_suggestion: Option<String>,
 }
@@ -65,8 +68,9 @@ impl Screen {
             line_needs_clear: vec![false; rows],
             suggestion_mode: false,
             suggestion_start_col: 0,
-            command_history: CommandHistory::new(1000),
+            command_history: CommandHistory::from_shell_history(1000),
             current_command: String::new(),
+            command_start_col: 0,
             active_suggestion: None,
         }
     }
@@ -119,14 +123,6 @@ impl Screen {
             // Escribir la celda
             self.grid[self.cursor.row][self.cursor.col] = cell;
 
-            // Actualizar buffer de comando si no estamos en modo sugerencia
-            if !self.suggestion_mode && ch.is_ascii() && !ch.is_control() {
-                self.current_command.push(ch);
-
-                // Generar sugerencia automática basada en historial
-                self.update_auto_suggestion();
-            }
-
             // Si el carácter es ancho, marcar las celdas siguientes como continuación
             if width > 1 {
                 for i in 1..width {
@@ -142,13 +138,6 @@ impl Screen {
 
     /// Line feed - avanza una línea
     pub fn line_feed(&mut self) {
-        // Guardar comando en historial si hay uno activo
-        if !self.current_command.is_empty() {
-            self.command_history
-                .add_command(self.current_command.clone());
-            self.current_command.clear();
-        }
-
         // Limpiar sugerencia activa
         self.active_suggestion = None;
 
@@ -350,6 +339,11 @@ impl Screen {
 
     /// Actualiza la sugerencia automática basada en el historial
     fn update_auto_suggestion(&mut self) {
+        eprintln!(
+            "[SCREEN] update_auto_suggestion llamado, current_command: '{}'",
+            self.current_command
+        );
+
         // Limpiar sugerencia anterior
         if self.active_suggestion.is_some() {
             self.clear_auto_suggestion();
@@ -357,17 +351,28 @@ impl Screen {
 
         // Buscar sugerencia en historial
         if let Some(suggestion) = self.command_history.find_suggestion(&self.current_command) {
+            eprintln!(
+                "[SCREEN] Mostrando sugerencia: '{}' después de col {} + len {}",
+                suggestion,
+                self.command_start_col,
+                self.current_command.len()
+            );
+
             // Guardar sugerencia activa
             self.active_suggestion = Some(suggestion.clone());
 
-            // Mostrar sugerencia en gris
-            let start_col = self.cursor.col;
+            // Mostrar sugerencia después del comando actual
+            let start_col = self.command_start_col + self.current_command.len();
             for (i, ch) in suggestion.chars().enumerate() {
                 let col = start_col + i;
                 if col < self.cols {
                     let mut cell = Cell::as_suggestion(ch);
                     cell.attrs = self.current_attrs;
                     self.grid[self.cursor.row][col] = cell;
+                    eprintln!(
+                        "[SCREEN] Escribiendo '{}' en col {} con is_suggestion=true",
+                        ch, col
+                    );
                 } else {
                     break;
                 }
@@ -378,7 +383,7 @@ impl Screen {
     /// Limpia la sugerencia automática actual
     fn clear_auto_suggestion(&mut self) {
         if let Some(suggestion) = &self.active_suggestion {
-            let start_col = self.cursor.col;
+            let start_col = self.command_start_col + self.current_command.len();
             for i in 0..suggestion.len() {
                 let col = start_col + i;
                 if col < self.cols && self.grid[self.cursor.row][col].is_suggestion {
@@ -419,13 +424,57 @@ impl Screen {
         self.active_suggestion.as_deref()
     }
 
-    /// Maneja el backspace eliminando el último carácter del comando actual
-    pub fn handle_backspace(&mut self) {
-        if !self.current_command.is_empty() {
-            self.current_command.pop();
-            // Actualizar sugerencia
+    /// Agrega un carácter al comando actual (desde input del usuario)
+    pub fn add_user_input(&mut self, ch: char) {
+        if ch.is_ascii() && !ch.is_control() {
+            // Si es el primer carácter del comando, guardar posición inicial
+            if self.current_command.is_empty() {
+                self.command_start_col = self.cursor.col;
+                eprintln!(
+                    "[SCREEN] Iniciando comando en col {}",
+                    self.command_start_col
+                );
+            }
+
+            self.current_command.push(ch);
+            eprintln!(
+                "[SCREEN] add_user_input: '{}' -> current_command: '{}'",
+                ch, self.current_command
+            );
             self.update_auto_suggestion();
         }
+    }
+
+    /// Elimina el último carácter del comando actual (backspace desde usuario)
+    pub fn remove_user_input(&mut self) {
+        if !self.current_command.is_empty() {
+            self.current_command.pop();
+            eprintln!(
+                "[SCREEN] remove_user_input -> current_command: '{}'",
+                self.current_command
+            );
+            self.update_auto_suggestion();
+        }
+    }
+
+    /// Resetea el comando actual (Enter desde usuario)
+    pub fn reset_user_input(&mut self) {
+        if !self.current_command.is_empty() {
+            eprintln!(
+                "[SCREEN] Guardando comando en historial: '{}'",
+                self.current_command
+            );
+            self.command_history
+                .add_command(self.current_command.clone());
+            self.current_command.clear();
+        }
+        self.command_start_col = 0;
+        self.active_suggestion = None;
+    }
+
+    /// Maneja el backspace eliminando el último carácter del comando actual
+    pub fn handle_backspace(&mut self) {
+        // Este método ahora está vacío, la lógica está en remove_user_input
     }
 
     /// Mueve el cursor a una posición específica

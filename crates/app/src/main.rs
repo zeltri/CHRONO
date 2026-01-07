@@ -179,6 +179,16 @@ fn main() -> Result<()> {
                         }
                     }
 
+                    // Enter para guardar comando
+                    if key_code == KeyCode::Enter {
+                        screen.lock().unwrap().reset_user_input();
+                    }
+
+                    // Backspace para borrar
+                    if key_code == KeyCode::Backspace {
+                        screen.lock().unwrap().remove_user_input();
+                    }
+
                     // Flecha derecha para aceptar sugerencia
                     if key_code == KeyCode::ArrowRight {
                         let mut screen_guard = screen.lock().unwrap();
@@ -214,6 +224,11 @@ fn main() -> Result<()> {
                     } else if let Some(text_str) = text {
                         // Si hay texto y no es una combinación especial, enviarlo
                         if !modifiers_state.control_key() && !modifiers_state.alt_key() {
+                            // Agregar al comando actual ANTES de enviar al PTY
+                            for ch in text_str.chars() {
+                                screen.lock().unwrap().add_user_input(ch);
+                            }
+
                             if let Err(e) = pty.write(text_str.as_bytes()) {
                                 log::error!("Error writing to PTY: {}", e);
                             }
