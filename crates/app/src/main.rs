@@ -172,8 +172,18 @@ fn main() -> Result<()> {
                     // Tab para aceptar sugerencia
                     if key_code == KeyCode::Tab {
                         let mut screen_guard = screen.lock().unwrap();
-                        if screen_guard.get_active_suggestion().is_some() {
-                            screen_guard.accept_suggestion();
+                        if let Some(suggestion) = screen_guard.get_active_suggestion() {
+                            let suggestion_text = suggestion.to_string();
+
+                            // Actualizar current_command sin renderizar (el PTY hará eco)
+                            screen_guard.accept_suggestion_for_pty();
+                            drop(screen_guard);
+
+                            // Enviar la sugerencia al PTY para que el shell la reciba
+                            if let Err(e) = pty.write(suggestion_text.as_bytes()) {
+                                log::error!("Error writing suggestion to PTY: {}", e);
+                            }
+
                             window.request_redraw();
                             return;
                         }
@@ -192,8 +202,18 @@ fn main() -> Result<()> {
                     // Flecha derecha para aceptar sugerencia
                     if key_code == KeyCode::ArrowRight {
                         let mut screen_guard = screen.lock().unwrap();
-                        if screen_guard.get_active_suggestion().is_some() {
-                            screen_guard.accept_suggestion();
+                        if let Some(suggestion) = screen_guard.get_active_suggestion() {
+                            let suggestion_text = suggestion.to_string();
+
+                            // Actualizar current_command sin renderizar (el PTY hará eco)
+                            screen_guard.accept_suggestion_for_pty();
+                            drop(screen_guard);
+
+                            // Enviar la sugerencia al PTY para que el shell la reciba
+                            if let Err(e) = pty.write(suggestion_text.as_bytes()) {
+                                log::error!("Error writing suggestion to PTY: {}", e);
+                            }
+
                             window.request_redraw();
                             return;
                         }

@@ -141,8 +141,9 @@ impl Screen {
         // Limpiar sugerencia activa
         self.active_suggestion = None;
 
-        // Analizar contexto de la línea actual antes de avanzar
-        self.update_line_context(self.cursor.row);
+        // NO analizar contexto de la línea actual aquí
+        // porque los comandos del usuario NO deben ser detectados como stack traces
+        // El contexto se actualizará cuando el output del comando se escriba
 
         if self.cursor.row < self.rows - 1 {
             self.cursor.row += 1;
@@ -416,6 +417,18 @@ impl Screen {
 
             // Limpiar sugerencia activa
             self.active_suggestion = None;
+        }
+    }
+
+    /// Acepta la sugerencia sin renderizar (el PTY hará el eco)
+    /// Solo actualiza el current_command y limpia la sugerencia visual
+    pub fn accept_suggestion_for_pty(&mut self) {
+        if let Some(suggestion) = &self.active_suggestion {
+            // Agregar la sugerencia al comando actual
+            self.current_command.push_str(suggestion);
+
+            // Limpiar la sugerencia visual (el eco del PTY la escribirá)
+            self.clear_auto_suggestion();
         }
     }
 
