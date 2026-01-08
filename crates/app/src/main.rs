@@ -45,7 +45,7 @@ fn main() -> Result<()> {
     let event_loop = EventLoop::new()?;
     let window = WindowBuilder::new()
         .with_title("Terminal Emulator - Rust")
-        .with_inner_size(winit::dpi::LogicalSize::new(800, 600))
+        .with_inner_size(winit::dpi::LogicalSize::new(800, 500))
         .build(&event_loop)?;
 
     let window = Arc::new(window);
