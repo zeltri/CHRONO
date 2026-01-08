@@ -2,6 +2,7 @@ use anyhow::Result;
 use log::info;
 use std::io::Read;
 use std::num::NonZeroU32;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -72,6 +73,9 @@ fn main() -> Result<()> {
     // Estado de modificadores
     let mut modifiers_state = ModifiersState::empty();
 
+    // Canal para notificar cuando el PTY se cierra
+    let (tx, rx) = mpsc::channel();
+
     // Thread para leer del PTY
     let screen_clone = Arc::clone(&screen);
     let mut pty_reader = pty.take_reader();
@@ -87,10 +91,14 @@ fn main() -> Result<()> {
                 }
                 Ok(_) => {
                     info!("PTY closed");
+                    // Notificar al event loop que el PTY se cerró
+                    let _ = tx.send(());
                     break;
                 }
                 Err(e) => {
                     log::error!("Error reading from PTY: {}", e);
+                    // Notificar al event loop que hubo un error
+                    let _ = tx.send(());
                     break;
                 }
             }
@@ -100,6 +108,12 @@ fn main() -> Result<()> {
 
     // Event loop
     event_loop.run(move |event, elwt| {
+        // Verificar si el PTY se cerró
+        if rx.try_recv().is_ok() {
+            info!("Shell terminado, cerrando aplicación");
+            elwt.exit();
+        }
+
         elwt.set_control_flow(ControlFlow::Wait);
 
         match event {

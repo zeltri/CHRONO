@@ -5,11 +5,13 @@
 //! - Cell attributes (colors, styles)
 //! - Cursor positioning
 //! - Semantic context detection (errors, warnings, file listings)
+//! - Smart content detection (logs, JSON, tables, stack traces)
 
 pub mod attributes;
 pub mod cell;
 pub mod context;
 pub mod cursor;
+pub mod detector;
 pub mod history;
 pub mod screen;
 
@@ -24,5 +26,8 @@ pub use context::{
     LineContext,
 };
 pub use cursor::Cursor;
+pub use detector::{
+    ContentDetector, ContentType, JsonFragment, JsonTokenType, LogLevel, TableInfo, TableRowType,
+};
 pub use history::CommandHistory;
 pub use screen::Screen;

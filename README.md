@@ -23,12 +23,13 @@ CHRONO es un emulador de terminal construido desde cero en Rust, diseñado para 
 -   🌈 **Full ANSI Support** - Colores 24-bit, estilos y secuencias VT
 -   📦 **Arquitectura Modular** - Crates independientes y testeables
 -   💡 **Smart Suggestions** - Autocompletado visual en gris claro (Fish/Zsh style)
+-   🎨 **Output Tipado** - Detección y colores automáticos para logs, JSON, tablas y más
 
 ---
 
 ## ✨ Features
 
-### ✅ Implementado (Fases 1-2)
+### ✅ Implementado (Fases 1-3)
 
 #### Core Functionality
 
@@ -50,14 +51,25 @@ CHRONO es un emulador de terminal construido desde cero en Rust, diseñado para 
 -   ✅ **Clipboard Integration** - Copy/paste con `Ctrl+Shift+C/V`
 -   ✅ **Shortcuts** - `Ctrl+C`, `Ctrl+D`, `Ctrl+L`, etc.
 
-#### Smart Features (NEW! ⭐)
+#### Smart Features (⭐ NEW!)
 
 -   ✅ **Autocompletado Visual** - Sugerencias en gris claro al estilo Fish/Zsh
+
     -   🔹 Secuencias ANSI personalizadas (ESC[53m/54m)
     -   🔹 Limpieza automática al escribir
     -   🔹 Color gris sutil y configurable
     -   🔹 API pública completa en Rust
-    -   📖 [Ver guía completa](SUGGESTIONS_GUIDE.md)
+    -   📖 [Ver guía completa](docs/SUGGESTIONS.md)
+
+-   ✅ **Renderizado Inteligente** - Detección y colores automáticos
+    -   🎨 **Logs estructurados** - INFO (azul), WARN (amarillo), ERROR (rojo), DEBUG (cyan)
+    -   📊 **JSON coloreado** - Keys, strings, números, booleanos con sintaxis highlight
+    -   📋 **Tablas ASCII** - Detección y formato mejorado
+    -   🔍 **Stack traces** - Multi-lenguaje (Rust, Python, Java, JS, etc.)
+    -   ❌ **Errores y excepciones** - Resaltado automático en rojo
+    -   ✅ **Mensajes de éxito** - Indicadores verdes
+    -   ⚙️ **Configurable** - Activar/desactivar por tipo sin romper scripts
+    -   📖 [Ver documentación completa](docs/SMART_RENDERING.md)
 -   ✅ **Sugerencias Inteligentes de Historial** - Como Kitty Terminal 🆕
     -   🔹 Busca automáticamente en comandos previos
     -   🔹 Sugiere basándose en primeras letras

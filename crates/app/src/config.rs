@@ -12,6 +12,9 @@ pub struct Config {
 
     #[serde(default)]
     pub terminal: TerminalConfig,
+
+    #[serde(default)]
+    pub rendering: RenderingConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,12 +43,32 @@ pub struct TerminalConfig {
     pub shell: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderingConfig {
+    /// Habilita detección inteligente de contenido (logs, JSON, tablas, etc.)
+    #[serde(default = "default_smart_detection")]
+    pub smart_detection: bool,
+
+    /// Habilita colores para JSON
+    #[serde(default = "default_json_colors")]
+    pub json_colors: bool,
+
+    /// Habilita colores para logs
+    #[serde(default = "default_log_colors")]
+    pub log_colors: bool,
+
+    /// Habilita detección de tablas
+    #[serde(default = "default_table_detection")]
+    pub table_detection: bool,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             font: FontConfig::default(),
             colors: ColorsConfig::default(),
             terminal: TerminalConfig::default(),
+            rendering: RenderingConfig::default(),
         }
     }
 }
@@ -77,12 +100,39 @@ impl Default for TerminalConfig {
     }
 }
 
+impl Default for RenderingConfig {
+    fn default() -> Self {
+        Self {
+            smart_detection: default_smart_detection(),
+            json_colors: default_json_colors(),
+            log_colors: default_log_colors(),
+            table_detection: default_table_detection(),
+        }
+    }
+}
+
 fn default_font_size() -> f32 {
     16.0
 }
 
 fn default_font_family() -> String {
     "CascadiaCode".to_string()
+}
+
+fn default_smart_detection() -> bool {
+    true // Habilitado por defecto
+}
+
+fn default_json_colors() -> bool {
+    true
+}
+
+fn default_log_colors() -> bool {
+    true
+}
+
+fn default_table_detection() -> bool {
+    true
 }
 
 fn default_foreground() -> [u8; 3] {

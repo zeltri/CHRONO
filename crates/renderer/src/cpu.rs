@@ -1,8 +1,11 @@
 use crate::ModernTheme;
 use fontdue::{Font, FontSettings};
-use terminal_core::{extract_file_references, parse_file_entry, LineContext, Screen};
+use terminal_core::{
+    extract_file_references, parse_file_entry, ContentDetector, ContentType, JsonTokenType,
+    LineContext, LogLevel, Screen,
+};
 
-/// Renderer CPU moderno con tema oscuro innovador
+/// Renderer CPU moderno con tema oscuro innovador y detección inteligente de contenido
 pub struct CpuRenderer {
     /// Ancho de la ventana en píxeles
     width: u32,
@@ -24,6 +27,8 @@ pub struct CpuRenderer {
     theme: ModernTheme,
     /// Frame counter para animaciones sutiles
     frame_count: u32,
+    /// Detector de contenido inteligente
+    content_detector: ContentDetector,
 }
 
 impl CpuRenderer {
@@ -58,6 +63,7 @@ impl CpuRenderer {
             hovered_file: None,
             theme: ModernTheme::default(),
             frame_count: 0,
+            content_detector: ContentDetector::new(),
         }
     }
 
@@ -82,12 +88,17 @@ impl CpuRenderer {
         let grid = screen.get_visible();
 
         for (row_idx, row) in grid.iter().enumerate() {
-            // Obtener contexto de la línea
+            // Obtener texto de la línea para detección
+            let line_text: String = row.iter().map(|c| c.character).collect();
+
+            // Obtener contexto de la línea (del sistema existente)
             let line_context = screen.get_line_context(row_idx);
+
+            // Detectar tipo de contenido con el nuevo sistema
+            let content_type = self.content_detector.detect_line(&line_text);
 
             // Extraer referencias a archivos si es stack trace
             let file_refs = if line_context == LineContext::StackTrace {
-                let line_text: String = row.iter().map(|c| c.character).collect();
                 extract_file_references(&line_text)
             } else {
                 Vec::new()
@@ -95,10 +106,16 @@ impl CpuRenderer {
 
             // Parsear entrada de archivo si es un listado
             let file_entry = if line_context == LineContext::FileList {
-                let line_text: String = row.iter().map(|c| c.character).collect();
                 parse_file_entry(&line_text)
             } else {
                 None
+            };
+
+            // Parsear fragmentos JSON si es JSON
+            let json_fragments = if content_type == ContentType::Json {
+                self.content_detector.parse_json_fragments(&line_text)
+            } else {
+                Vec::new()
             };
 
             for (col_idx, cell) in row.iter().enumerate() {
@@ -116,6 +133,11 @@ impl CpuRenderer {
                     col_idx >= entry.start_col && col_idx < entry.end_col
                 });
 
+                // Determinar si es parte de un fragmento JSON
+                let json_fragment = json_fragments
+                    .iter()
+                    .find(|f| col_idx >= f.start_col && col_idx < f.end_col);
+
                 // Renderizar fondo de celda
                 let bg = self.color_to_u32(cell.attrs.bg_color);
                 self.fill_rect(buffer, x, y, self.char_width, self.char_height, bg);
@@ -130,8 +152,12 @@ impl CpuRenderer {
                     } else if is_file_entry {
                         // Colorear según tipo de archivo
                         self.get_file_color(file_entry.as_ref().unwrap())
+                    } else if let Some(fragment) = json_fragment {
+                        // Colorear según token JSON
+                        self.get_json_color(fragment.token_type)
                     } else {
-                        self.get_context_color(cell, line_context)
+                        // Usar nuevo sistema de detección de contenido
+                        self.get_content_color(cell, line_context, content_type)
                     };
                     self.render_char(buffer, cell.character, x, y, fg);
                 }
@@ -255,6 +281,53 @@ impl CpuRenderer {
             LineContext::StackTrace => self.theme.accent_cyan_u32(),
             LineContext::FileList => self.theme.fg_primary_u32(), // Default, se sobrescribe por get_file_color
             LineContext::Normal => self.color_to_u32(cell.attrs.fg_color),
+        }
+    }
+
+    /// Obtiene color basado en el tipo de contenido detectado
+    fn get_content_color(
+        &self,
+        cell: &terminal_core::Cell,
+        context: LineContext,
+        content_type: ContentType,
+    ) -> u32 {
+        match content_type {
+            ContentType::Log(level) => self.get_log_color(level),
+            ContentType::Error => self.theme.log_error_u32(),
+            ContentType::Warning => self.theme.log_warn_u32(),
+            ContentType::Success => self.theme.success_u32(),
+            ContentType::StackTrace => self.theme.accent_cyan_u32(),
+            ContentType::Table => self.theme.fg_primary_u32(),
+            ContentType::Json => self.theme.fg_primary_u32(),
+            ContentType::Normal => self.get_context_color(cell, context),
+        }
+    }
+
+    /// Obtiene color según el nivel de log
+    fn get_log_color(&self, level: LogLevel) -> u32 {
+        match level {
+            LogLevel::Trace => self.theme.log_trace_u32(),
+            LogLevel::Debug => self.theme.log_debug_u32(),
+            LogLevel::Info => self.theme.log_info_u32(),
+            LogLevel::Warn => self.theme.log_warn_u32(),
+            LogLevel::Error => self.theme.log_error_u32(),
+            LogLevel::Fatal => self.theme.log_fatal_u32(),
+        }
+    }
+
+    /// Obtiene color según el tipo de token JSON
+    fn get_json_color(&self, token_type: JsonTokenType) -> u32 {
+        match token_type {
+            JsonTokenType::BraceOpen
+            | JsonTokenType::BraceClose
+            | JsonTokenType::BracketOpen
+            | JsonTokenType::BracketClose => self.theme.json_bracket_u32(),
+            JsonTokenType::Key => self.theme.json_key_u32(),
+            JsonTokenType::String => self.theme.json_string_u32(),
+            JsonTokenType::Number => self.theme.json_number_u32(),
+            JsonTokenType::Boolean => self.theme.json_boolean_u32(),
+            JsonTokenType::Null => self.theme.json_null_u32(),
+            JsonTokenType::Colon | JsonTokenType::Comma => self.theme.fg_primary_u32(),
         }
     }
 

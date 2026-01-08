@@ -16,3 +16,17 @@ background = [0, 0, 0]
 [shell]
 # Shell por defecto (vacío = usar $SHELL o /bin/bash)
 command = ""
+
+[rendering]
+# Habilita detección inteligente de contenido (logs, JSON, tablas, stack traces)
+# Útil en modo interactivo, desactivar para scripts o pipelines
+smart_detection = true
+
+# Habilita sintaxis coloreada para JSON
+json_colors = true
+
+# Habilita colores automáticos para logs (INFO, WARN, ERROR, etc.)
+log_colors = true
+
+# Habilita detección y formateo de tablas ASCII
+table_detection = true

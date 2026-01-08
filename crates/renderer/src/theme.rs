@@ -142,4 +142,86 @@ impl ModernTheme {
             self.fg_suggestion.2,
         )
     }
+
+    // === Colores para tipos de contenido detectados ===
+
+    /// Color para mensajes de log INFO
+    pub fn log_info_u32(&self) -> u32 {
+        self.accent_blue_u32()
+    }
+
+    /// Color para mensajes de log WARN
+    pub fn log_warn_u32(&self) -> u32 {
+        self.accent_yellow_u32()
+    }
+
+    /// Color para mensajes de log ERROR
+    pub fn log_error_u32(&self) -> u32 {
+        self.accent_red_u32()
+    }
+
+    /// Color para mensajes de log DEBUG
+    pub fn log_debug_u32(&self) -> u32 {
+        self.accent_cyan_u32()
+    }
+
+    /// Color para mensajes de log TRACE
+    pub fn log_trace_u32(&self) -> u32 {
+        Self::rgb_to_u32(self.fg_muted.0, self.fg_muted.1, self.fg_muted.2)
+    }
+
+    /// Color para mensajes de log FATAL
+    pub fn log_fatal_u32(&self) -> u32 {
+        // Rojo más intenso para FATAL
+        Self::rgb_to_u32(255, 50, 50)
+    }
+
+    /// Color para mensajes de éxito
+    pub fn success_u32(&self) -> u32 {
+        self.accent_green_u32()
+    }
+
+    /// Color para llaves y brackets JSON
+    pub fn json_bracket_u32(&self) -> u32 {
+        Self::rgb_to_u32(
+            self.fg_secondary.0,
+            self.fg_secondary.1,
+            self.fg_secondary.2,
+        )
+    }
+
+    /// Color para keys JSON
+    pub fn json_key_u32(&self) -> u32 {
+        self.accent_blue_u32()
+    }
+
+    /// Color para strings JSON
+    pub fn json_string_u32(&self) -> u32 {
+        self.accent_green_u32()
+    }
+
+    /// Color para números JSON
+    pub fn json_number_u32(&self) -> u32 {
+        self.accent_orange_u32()
+    }
+
+    /// Color para booleanos JSON
+    pub fn json_boolean_u32(&self) -> u32 {
+        self.accent_magenta_u32()
+    }
+
+    /// Color para null JSON
+    pub fn json_null_u32(&self) -> u32 {
+        self.accent_cyan_u32()
+    }
+
+    /// Color para separadores de tabla
+    pub fn table_separator_u32(&self) -> u32 {
+        Self::rgb_to_u32(self.fg_muted.0, self.fg_muted.1, self.fg_muted.2)
+    }
+
+    /// Color para encabezados de tabla
+    pub fn table_header_u32(&self) -> u32 {
+        self.accent_cyan_u32()
+    }
 }

@@ -472,6 +472,11 @@ impl Screen {
 
     /// Resetea el comando actual (Enter desde usuario)
     pub fn reset_user_input(&mut self) {
+        // Limpiar sugerencia visual antes de resetear
+        if self.active_suggestion.is_some() {
+            self.clear_auto_suggestion();
+        }
+
         if !self.current_command.is_empty() {
             eprintln!(
                 "[SCREEN] Guardando comando en historial: '{}'",
