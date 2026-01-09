@@ -78,6 +78,7 @@ fn main() -> Result<()> {
 
     // Thread para leer del PTY
     let screen_clone = Arc::clone(&screen);
+    let window_clone = Arc::clone(&window);
     let mut pty_reader = pty.take_reader();
     thread::spawn(move || {
         let mut parser = AnsiParser::new();
@@ -88,6 +89,10 @@ fn main() -> Result<()> {
                 Ok(n) if n > 0 => {
                     let mut screen = screen_clone.lock().unwrap();
                     parser.process(&buffer[..n], &mut screen);
+                    drop(screen); // Liberar lock antes de request_redraw
+
+                    // Notificar al event loop que hay cambios
+                    window_clone.request_redraw();
                 }
                 Ok(_) => {
                     info!("PTY closed");
@@ -102,7 +107,9 @@ fn main() -> Result<()> {
                     break;
                 }
             }
-            thread::sleep(Duration::from_millis(1));
+            // OPTIMIZACIÓN: Aumentado de 1ms a 16ms (~60 FPS)
+            // Reduce wakeups de 1000/s a 60/s - ahorro de 94% de CPU
+            thread::sleep(Duration::from_millis(16));
         }
     });
 
@@ -274,6 +281,17 @@ fn main() -> Result<()> {
                     let (width, height) = (window_size.width, window_size.height);
 
                     if width > 0 && height > 0 {
+                        // Verificar si el screen está dirty antes de renderizar
+                        let should_render = {
+                            let screen_guard = screen.lock().unwrap();
+                            screen_guard.is_dirty()
+                        };
+
+                        if !should_render {
+                            // No hay cambios, skip rendering para ahorrar CPU
+                            return;
+                        }
+
                         surface
                             .resize(
                                 NonZeroU32::new(width).unwrap(),
@@ -285,8 +303,9 @@ fn main() -> Result<()> {
 
                         // Renderizar
                         {
-                            let screen = screen.lock().unwrap();
-                            renderer.render(&screen, &mut buffer);
+                            let mut screen = screen.lock().unwrap();
+                            renderer.render(&mut screen, &mut buffer);
+                            screen.mark_clean(); // Marcar como limpio después de renderizar
                         }
 
                         buffer.present().unwrap();
@@ -294,10 +313,8 @@ fn main() -> Result<()> {
                 }
                 _ => {}
             },
-            Event::AboutToWait => {
-                // Redibujar periódicamente
-                window.request_redraw();
-            }
+            // Removido: Event::AboutToWait con request_redraw() continuo
+            // Ahora solo redibujamos cuando hay eventos reales (PTY output, input, resize, etc.)
             _ => {}
         }
     })?;

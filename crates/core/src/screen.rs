@@ -3,6 +3,7 @@ use crate::{
     cell::Cell,
     context::{analyze_line_context, LineContext},
     cursor::Cursor,
+    detector::ContentType,
     history::CommandHistory,
 };
 
@@ -30,6 +31,9 @@ pub struct Screen {
     /// Contexto semántico por línea
     pub line_contexts: Vec<LineContext>,
 
+    /// Cache de ContentType detectado por línea (para evitar re-análisis costosos)
+    pub content_type_cache: Vec<Option<ContentType>>,
+
     /// Marca si la línea necesita limpieza después de carriage return
     line_needs_clear: Vec<bool>,
 
@@ -50,6 +54,9 @@ pub struct Screen {
 
     /// Sugerencia actual activa (el sufijo que se muestra en gris)
     active_suggestion: Option<String>,
+
+    /// Flag para indicar si el screen ha sido modificado desde el último render
+    dirty: bool,
 }
 
 impl Screen {
@@ -65,6 +72,7 @@ impl Screen {
             current_attrs: CellAttributes::default(),
             max_scrollback: 10_000,
             line_contexts: vec![LineContext::Normal; rows],
+            content_type_cache: vec![None; rows],
             line_needs_clear: vec![false; rows],
             suggestion_mode: false,
             suggestion_start_col: 0,
@@ -72,11 +80,34 @@ impl Screen {
             current_command: String::new(),
             command_start_col: 0,
             active_suggestion: None,
+            dirty: true, // Inicialmente marcado como dirty
         }
+    }
+
+    /// Verifica si el screen necesita ser re-renderizado
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Marca el screen como limpio (después de renderizar)
+    pub fn mark_clean(&mut self) {
+        self.dirty = false;
+    }
+
+    /// Marca el screen como dirty (necesita re-renderizado)
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
     }
 
     /// Escribe un carácter en la posición del cursor
     pub fn write_char(&mut self, ch: char) {
+        self.mark_dirty();
+
+        // Invalidar cache de content type para esta línea
+        if self.cursor.row < self.content_type_cache.len() {
+            self.content_type_cache[self.cursor.row] = None;
+        }
+
         if self.cursor.col >= self.cols {
             self.cursor.carriage_return();
             self.cursor.line_feed(self.rows - 1);
@@ -138,6 +169,7 @@ impl Screen {
 
     /// Line feed - avanza una línea
     pub fn line_feed(&mut self) {
+        self.mark_dirty();
         // Limpiar sugerencia activa
         self.active_suggestion = None;
 
@@ -182,6 +214,7 @@ impl Screen {
 
     /// Scroll hacia arriba n líneas
     pub fn scroll_up(&mut self, n: usize) {
+        self.mark_dirty();
         for _ in 0..n {
             if !self.grid.is_empty() {
                 let line = self.grid.remove(0);
@@ -211,6 +244,7 @@ impl Screen {
 
     /// Limpia desde el cursor hasta el final de la línea
     pub fn clear_line_right(&mut self) {
+        self.mark_dirty();
         if self.cursor.row < self.rows {
             for col in self.cursor.col..self.cols {
                 self.grid[self.cursor.row][col] = Cell::empty();
@@ -220,6 +254,7 @@ impl Screen {
 
     /// Limpia toda la línea actual
     pub fn clear_line(&mut self) {
+        self.mark_dirty();
         if self.cursor.row < self.rows {
             for col in 0..self.cols {
                 self.grid[self.cursor.row][col] = Cell::empty();
@@ -229,6 +264,7 @@ impl Screen {
 
     /// Limpia desde la línea actual hasta el final de la pantalla
     pub fn clear_to_end_of_screen(&mut self) {
+        self.mark_dirty();
         // Limpiar desde cursor hasta final de la línea actual
         self.clear_line_right();
 
@@ -269,6 +305,7 @@ impl Screen {
 
     /// Redimensiona la pantalla
     pub fn resize(&mut self, new_rows: usize, new_cols: usize) {
+        self.mark_dirty();
         // Si hay menos filas, mover las eliminadas al scrollback
         while self.grid.len() > new_rows {
             let line = self.grid.remove(0);
@@ -290,6 +327,7 @@ impl Screen {
 
         // Ajustar contextos de línea y flags
         self.line_contexts.resize(new_rows, LineContext::Normal);
+        self.content_type_cache.resize(new_rows, None);
         self.line_needs_clear.resize(new_rows, false);
 
         // Limitar cursor

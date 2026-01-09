@@ -78,12 +78,22 @@ impl CpuRenderer {
         (rows.max(1), cols.max(1))
     }
 
-    pub fn render(&mut self, screen: &Screen, buffer: &mut [u32]) {
+    pub fn render(&mut self, screen: &mut Screen, buffer: &mut [u32]) {
         self.frame_count = self.frame_count.wrapping_add(1);
 
         // Limpiar buffer con fondo moderno
         let bg_color = self.theme.bg_primary_u32();
         buffer.fill(bg_color);
+
+        // OPTIMIZACIÓN: Primero detectar y cachear todos los content types
+        // para evitar conflictos de borrowing
+        for row_idx in 0..screen.rows {
+            if screen.content_type_cache[row_idx].is_none() {
+                let line_text: String = screen.grid[row_idx].iter().map(|c| c.character).collect();
+                let detected = self.content_detector.detect_line(&line_text);
+                screen.content_type_cache[row_idx] = Some(detected);
+            }
+        }
 
         let grid = screen.get_visible();
 
@@ -94,8 +104,8 @@ impl CpuRenderer {
             // Obtener contexto de la línea (del sistema existente)
             let line_context = screen.get_line_context(row_idx);
 
-            // Detectar tipo de contenido con el nuevo sistema
-            let content_type = self.content_detector.detect_line(&line_text);
+            // OPTIMIZACIÓN: Obtener del cache (ya está poblado arriba)
+            let content_type = screen.content_type_cache[row_idx].unwrap_or(ContentType::Normal);
 
             // Extraer referencias a archivos si es stack trace
             let file_refs = if line_context == LineContext::StackTrace {
