@@ -477,7 +477,8 @@ impl Screen {
 
     /// Agrega un carácter al comando actual (desde input del usuario)
     pub fn add_user_input(&mut self, ch: char) {
-        if ch.is_ascii() && !ch.is_control() {
+        // Aceptar cualquier carácter que no sea de control (incluyendo UTF-8)
+        if !ch.is_control() {
             // Si es el primer carácter del comando, guardar posición inicial
             if self.current_command.is_empty() {
                 self.command_start_col = self.cursor.col;

@@ -112,6 +112,12 @@ impl CommandHistory {
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
+    /// Verifica si un comando contiene caracteres UTF-8 válidos
+    /// Rechaza comandos con el carácter de reemplazo UTF-8 (�)
+    fn is_valid_utf8_command(cmd: &str) -> bool {
+        !cmd.contains('\u{FFFD}') // U+FFFD es el carácter de reemplazo UTF-8
+    }
+
     /// Obtiene la ruta del archivo en el home del usuario
     fn get_home_path(filename: &str) -> Option<PathBuf> {
         std::env::var("HOME")
@@ -138,7 +144,7 @@ impl CommandHistory {
             };
 
             let command = command.trim();
-            if !command.is_empty() {
+            if !command.is_empty() && Self::is_valid_utf8_command(command) {
                 all_commands.push(command.to_string());
             }
         }
@@ -177,7 +183,7 @@ impl CommandHistory {
     fn parse_bash_history(&mut self, content: &str) {
         for line in content.lines() {
             let command = line.trim();
-            if !command.is_empty() {
+            if !command.is_empty() && Self::is_valid_utf8_command(command) {
                 self.commands.push(command.to_string());
             }
         }
