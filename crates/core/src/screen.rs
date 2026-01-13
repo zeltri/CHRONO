@@ -57,6 +57,18 @@ pub struct Screen {
 
     /// Flag para indicar si el screen ha sido modificado desde el último render
     dirty: bool,
+
+    /// Selección activa (inicio y fin)
+    selection: Option<Selection>,
+}
+
+/// Estructura para manejar la selección de texto
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Selection {
+    /// Posición inicial de la selección (fila, columna)
+    pub start: (usize, usize),
+    /// Posición final de la selección (fila, columna)
+    pub end: (usize, usize),
 }
 
 impl Screen {
@@ -81,6 +93,7 @@ impl Screen {
             command_start_col: 0,
             active_suggestion: None,
             dirty: true, // Inicialmente marcado como dirty
+            selection: None,
         }
     }
 
@@ -538,5 +551,129 @@ impl Screen {
     pub fn move_cursor_to(&mut self, row: usize, col: usize) {
         self.cursor.row = row.min(self.rows.saturating_sub(1));
         self.cursor.col = col.min(self.cols.saturating_sub(1));
+    }
+
+    /// Inicia una selección en la posición especificada
+    pub fn start_selection(&mut self, row: usize, col: usize) {
+        let row = row.min(self.rows.saturating_sub(1));
+        let col = col.min(self.cols.saturating_sub(1));
+        self.selection = Some(Selection {
+            start: (row, col),
+            end: (row, col),
+        });
+        self.mark_dirty();
+    }
+
+    /// Actualiza el final de la selección
+    pub fn update_selection(&mut self, row: usize, col: usize) {
+        if let Some(selection) = &mut self.selection {
+            let row = row.min(self.rows.saturating_sub(1));
+            let col = col.min(self.cols.saturating_sub(1));
+            selection.end = (row, col);
+            self.mark_dirty();
+        }
+    }
+
+    /// Limpia la selección actual
+    pub fn clear_selection(&mut self) {
+        if self.selection.is_some() {
+            self.selection = None;
+            self.mark_dirty();
+        }
+    }
+
+    /// Obtiene la selección actual
+    pub fn get_selection(&self) -> Option<Selection> {
+        self.selection
+    }
+
+    /// Verifica si una celda está dentro de la selección
+    pub fn is_selected(&self, row: usize, col: usize) -> bool {
+        if let Some(selection) = self.selection {
+            let (start_row, start_col) = selection.start;
+            let (end_row, end_col) = selection.end;
+
+            // Normalizar la selección para que start sea siempre antes que end
+            let (start_row, start_col, end_row, end_col) =
+                if (start_row, start_col) <= (end_row, end_col) {
+                    (start_row, start_col, end_row, end_col)
+                } else {
+                    (end_row, end_col, start_row, start_col)
+                };
+
+            // Verificar si la posición está dentro del rango
+            if row < start_row || row > end_row {
+                return false;
+            }
+
+            if row == start_row && row == end_row {
+                // Misma fila
+                col >= start_col && col <= end_col
+            } else if row == start_row {
+                // Primera fila de la selección
+                col >= start_col
+            } else if row == end_row {
+                // Última fila de la selección
+                col <= end_col
+            } else {
+                // Filas intermedias
+                true
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Obtiene el texto seleccionado
+    pub fn get_selected_text(&self) -> Option<String> {
+        let selection = self.selection?;
+        let (start_row, start_col) = selection.start;
+        let (end_row, end_col) = selection.end;
+
+        // Normalizar la selección
+        let (start_row, start_col, end_row, end_col) =
+            if (start_row, start_col) <= (end_row, end_col) {
+                (start_row, start_col, end_row, end_col)
+            } else {
+                (end_row, end_col, start_row, start_col)
+            };
+
+        let mut text = String::new();
+
+        for row in start_row..=end_row {
+            if row >= self.rows {
+                break;
+            }
+
+            let start_col_in_row = if row == start_row { start_col } else { 0 };
+            let end_col_in_row = if row == end_row {
+                end_col
+            } else {
+                self.cols - 1
+            };
+
+            for col in start_col_in_row..=end_col_in_row.min(self.cols - 1) {
+                let cell = &self.grid[row][col];
+                if cell.character != '\0' && cell.character != ' ' {
+                    text.push(cell.character);
+                } else if col < end_col_in_row {
+                    // Mantener espacios intermedios, pero no al final de la línea
+                    text.push(' ');
+                }
+            }
+
+            // Agregar salto de línea si no es la última fila
+            if row < end_row {
+                text.push('\n');
+            }
+        }
+
+        // Limpiar espacios al final
+        let trimmed = text.trim_end().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     }
 }

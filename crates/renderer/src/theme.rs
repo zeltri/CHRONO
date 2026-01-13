@@ -143,6 +143,12 @@ impl ModernTheme {
         )
     }
 
+    /// Color de fondo para selección de texto
+    pub fn selection_bg_u32(&self) -> u32 {
+        // Usar un azul oscuro semi-transparente
+        Self::rgb_to_u32(65, 120, 190)
+    }
+
     // === Colores para tipos de contenido detectados ===
 
     /// Color para mensajes de log INFO

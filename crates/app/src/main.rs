@@ -21,6 +21,88 @@ use terminal_renderer::CpuRenderer;
 mod config;
 use config::Config;
 
+/// Copia texto al portapapeles usando múltiples métodos como fallback
+fn copy_to_clipboard(text: &str) -> Result<()> {
+    // En Linux, preferir herramientas del sistema para evitar timeouts del clipboard manager
+    #[cfg(target_os = "linux")]
+    {
+        // Intentar primero con wl-copy (Wayland)
+        if let Ok(mut child) = std::process::Command::new("wl-copy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    drop(stdin);
+                    if child.wait().is_ok() {
+                        log::info!("Text copied to clipboard using wl-copy");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // Intentar con xclip (X11)
+        if let Ok(mut child) = std::process::Command::new("xclip")
+            .arg("-selection")
+            .arg("clipboard")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    drop(stdin);
+                    if child.wait().is_ok() {
+                        log::info!("Text copied to clipboard using xclip");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // Intentar con xsel (X11)
+        if let Ok(mut child) = std::process::Command::new("xsel")
+            .arg("-b")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    drop(stdin);
+                    if child.wait().is_ok() {
+                        log::info!("Text copied to clipboard using xsel");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // Si ninguna herramienta del sistema funciona, intentar arboard como último recurso
+        log::debug!("System clipboard tools not available, trying arboard...");
+    }
+
+    // En otros sistemas o como fallback en Linux, usar arboard
+    match arboard::Clipboard::new() {
+        Ok(mut clipboard) => match clipboard.set_text(text) {
+            Ok(_) => {
+                log::info!("Text copied to clipboard using arboard");
+                return Ok(());
+            }
+            Err(e) => {
+                log::error!("Arboard failed: {}", e);
+                return Err(anyhow::anyhow!("Failed to copy: {}", e));
+            }
+        },
+        Err(e) => {
+            log::error!("Could not create clipboard: {}", e);
+            return Err(anyhow::anyhow!("Failed to create clipboard: {}", e));
+        }
+    }
+}
+
 fn main() -> Result<()> {
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Info)
@@ -72,6 +154,10 @@ fn main() -> Result<()> {
 
     // Estado de modificadores
     let mut modifiers_state = ModifiersState::empty();
+
+    // Estado de selección con mouse
+    let mut is_dragging = false;
+    let mut last_mouse_position = (0.0, 0.0);
 
     // Canal para notificar cuando el PTY se cierra
     let (tx, rx) = mpsc::channel();
@@ -130,8 +216,21 @@ fn main() -> Result<()> {
                     elwt.exit();
                 }
                 WindowEvent::CursorMoved { position, .. } => {
+                    // Guardar la posición del cursor
+                    last_mouse_position = (position.x, position.y);
+
                     let screen_guard = screen.lock().unwrap();
                     renderer.check_file_hover(&screen_guard, position.x, position.y);
+
+                    // Si estamos arrastrando, actualizar la selección
+                    if is_dragging {
+                        let (row, col) = renderer.screen_to_grid(position.x, position.y);
+                        drop(screen_guard);
+                        let mut screen_mut = screen.lock().unwrap();
+                        screen_mut.update_selection(row, col);
+                        window.request_redraw();
+                        return;
+                    }
 
                     // Cambiar cursor si está sobre un enlace
                     if renderer.hovered_file.is_some() {
@@ -145,6 +244,7 @@ fn main() -> Result<()> {
                     button: MouseButton::Left,
                     ..
                 } => {
+                    // Primero verificar si hay un archivo clickeable
                     if let Some((row, path, line)) = &renderer.hovered_file {
                         log::info!("Click on file: {} at line {:?} (row {})", path, line, row);
 
@@ -157,7 +257,24 @@ fn main() -> Result<()> {
                         } else {
                             std::process::Command::new("code").arg(path).spawn()
                         };
+                        return;
                     }
+
+                    // Si no hay archivo, iniciar selección
+                    let (row, col) =
+                        renderer.screen_to_grid(last_mouse_position.0, last_mouse_position.1);
+
+                    let mut screen_mut = screen.lock().unwrap();
+                    screen_mut.start_selection(row, col);
+                    is_dragging = true;
+                    window.request_redraw();
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    is_dragging = false;
                 }
                 WindowEvent::Resized(size) => {
                     info!("Ventana redimensionada: {}x{}", size.width, size.height);
@@ -251,6 +368,29 @@ fn main() -> Result<()> {
                             if let Err(e) = pty.write(clipboard_text.as_bytes()) {
                                 log::error!("Error pasting text: {}", e);
                             }
+                        }
+                        return;
+                    }
+
+                    // Ctrl+Shift+C para copiar
+                    if key_code == KeyCode::KeyC
+                        && modifiers_state.control_key()
+                        && modifiers_state.shift_key()
+                    {
+                        let screen_guard = screen.lock().unwrap();
+                        if let Some(selected_text) = screen_guard.get_selected_text() {
+                            drop(screen_guard); // Liberar el lock antes de copiar
+
+                            match copy_to_clipboard(&selected_text) {
+                                Ok(_) => {
+                                    log::info!("Selection copied to clipboard");
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to copy to clipboard: {}", e);
+                                }
+                            }
+                        } else {
+                            log::warn!("No text selected to copy");
                         }
                         return;
                     }

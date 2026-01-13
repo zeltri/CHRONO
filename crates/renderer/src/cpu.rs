@@ -148,8 +148,16 @@ impl CpuRenderer {
                     .iter()
                     .find(|f| col_idx >= f.start_col && col_idx < f.end_col);
 
+                // Verificar si esta celda está seleccionada
+                let is_selected = screen.is_selected(row_idx, col_idx);
+
                 // Renderizar fondo de celda
-                let bg = self.color_to_u32(cell.attrs.bg_color);
+                let bg = if is_selected {
+                    // Color de fondo para selección (azul oscuro semi-transparente)
+                    self.theme.selection_bg_u32()
+                } else {
+                    self.color_to_u32(cell.attrs.bg_color)
+                };
                 self.fill_rect(buffer, x, y, self.char_width, self.char_height, bg);
 
                 // Renderizar el carácter con color contextual
@@ -430,5 +438,12 @@ impl CpuRenderer {
         }
 
         self.hovered_file = None;
+    }
+
+    /// Convierte coordenadas de pantalla a posición de grid (fila, columna)
+    pub fn screen_to_grid(&self, mouse_x: f64, mouse_y: f64) -> (usize, usize) {
+        let col = (mouse_x / self.char_width as f64) as usize;
+        let row = (mouse_y / self.char_height as f64) as usize;
+        (row, col)
     }
 }
