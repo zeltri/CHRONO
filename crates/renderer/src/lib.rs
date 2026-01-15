@@ -82,10 +82,10 @@ mod tests {
     #[test]
     fn test_renderer_with_empty_screen() {
         let mut renderer = CpuRenderer::new(800, 600);
-        let screen = Screen::new(24, 80);
+        let mut screen = Screen::new(24, 80);
         let mut buffer = vec![0u32; 800 * 600];
 
-        renderer.render(&screen, &mut buffer);
+        renderer.render(&mut screen, &mut buffer);
         // No panic = success, rendering completed
     }
 
@@ -99,7 +99,7 @@ mod tests {
         screen.write_char('H');
         screen.write_char('i');
 
-        renderer.render(&screen, &mut buffer);
+        renderer.render(&mut screen, &mut buffer);
         // No panic = success
     }
 
