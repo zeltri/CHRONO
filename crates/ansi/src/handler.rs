@@ -57,8 +57,52 @@ impl<'a> Perform for AnsiHandler<'a> {
         log::trace!("Unhook no implementado");
     }
 
-    fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {
-        log::trace!("OSC dispatch no implementado");
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+        // Procesar secuencias OSC (Operating System Command)
+        // Estas secuencias son comunes en shells modernos como Zsh
+        
+        if params.is_empty() {
+            return;
+        }
+        
+        // El primer parámetro es el comando OSC
+        if let Ok(command) = std::str::from_utf8(params[0]) {
+            match command {
+                "0" | "1" | "2" => {
+                    // Cambiar título de la ventana
+                    // OSC 0: Cambiar título de ventana e ícono
+                    // OSC 1: Cambiar título del ícono
+                    // OSC 2: Cambiar título de la ventana
+                    if params.len() > 1 {
+                        if let Ok(title) = std::str::from_utf8(params[1]) {
+                            log::debug!("Window title change requested: {}", title);
+                            // TODO: Implementar cambio de título de ventana
+                        }
+                    }
+                }
+                "7" => {
+                    // Notificación de directorio actual (usado por algunos shells)
+                    if params.len() > 1 {
+                        if let Ok(cwd) = std::str::from_utf8(params[1]) {
+                            log::debug!("Current directory notification: {}", cwd);
+                            // TODO: Implementar tracking de directorio actual
+                        }
+                    }
+                }
+                "9" => {
+                    // Notificación de progreso (iTerm2, ConEmu)
+                    log::trace!("Progress notification received");
+                }
+                "133" => {
+                    // Shell integration sequences (VSCode, iTerm2)
+                    // Usado para marcar prompts, comandos, y output
+                    log::trace!("Shell integration sequence received");
+                }
+                _ => {
+                    log::trace!("OSC command not implemented: {}", command);
+                }
+            }
+        }
     }
 
     fn csi_dispatch(&mut self, params: &Params, _intermediates: &[u8], _ignore: bool, c: char) {

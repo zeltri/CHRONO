@@ -5,7 +5,6 @@ use std::num::NonZeroU32;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 use winit::{
     event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -171,6 +170,8 @@ fn main() -> Result<()> {
         let mut buffer = [0u8; 4096];
 
         loop {
+            // Read bloqueante - espera hasta que haya datos disponibles
+            // Esto hace que la respuesta sea instantánea sin consumir CPU
             match pty_reader.read(&mut buffer) {
                 Ok(n) if n > 0 => {
                     let mut screen = screen_clone.lock().unwrap();
@@ -193,9 +194,7 @@ fn main() -> Result<()> {
                     break;
                 }
             }
-            // OPTIMIZACIÓN: Aumentado de 1ms a 16ms (~60 FPS)
-            // Reduce wakeups de 1000/s a 60/s - ahorro de 94% de CPU
-            thread::sleep(Duration::from_millis(16));
+            // Sin sleep - el read() bloqueante ya espera por datos
         }
     });
 
@@ -337,7 +336,7 @@ fn main() -> Result<()> {
                         screen.lock().unwrap().remove_user_input();
                     }
 
-                    // Flecha derecha para aceptar sugerencia
+                    // Flecha derecha - aceptar sugerencia si existe, sino enviar al PTY para navegación
                     if key_code == KeyCode::ArrowRight {
                         let mut screen_guard = screen.lock().unwrap();
                         if let Some(suggestion) = screen_guard.get_active_suggestion() {
@@ -355,6 +354,7 @@ fn main() -> Result<()> {
                             window.request_redraw();
                             return;
                         }
+                        // Si no hay sugerencia, continuar para enviar la secuencia de escape al PTY
                     }
 
                     // Ctrl+Shift+V para pegar
@@ -402,6 +402,7 @@ fn main() -> Result<()> {
                         if let Err(e) = pty.write(&bytes) {
                             log::error!("Error writing to PTY: {}", e);
                         }
+                        // El redibujado se solicitará automáticamente cuando el PTY responda
                     } else if let Some(text_str) = text {
                         // Si hay texto y no es una combinación especial, enviarlo
                         if !modifiers_state.control_key() && !modifiers_state.alt_key() {
