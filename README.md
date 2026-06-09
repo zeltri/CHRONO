@@ -32,7 +32,9 @@ sugerencias de tu historial mientras escribes — sin plugins, sin configurar na
 | Un stack trace | Lo copias a mano | 🖱️ Click → se abre en tu editor |
 | Un JSON gigante | Muro de texto | 🎨 Syntax highlighting en vivo |
 | Repetir un comando | `Ctrl+R` y rezar | 💭 Sugerencia fantasma al estilo Fish |
-| `vim`, `htop`, `less` | — | ✅ Pantalla alternativa real (1049) |
+| `vim`, `htop`, `less` | — | ✅ Alt screen + mouse tracking reales |
+| Buscar ese comando de hace rato | Scroll infinito a ciegas | 🧭 `Ctrl+Shift+↑` salta entre prompts |
+| Varias sesiones | Varias ventanas | 🗂️ Tabs con `Ctrl+Shift+T` |
 
 Todo sobre una base VT sólida: **CHRONO habla el protocolo de verdad**, no una aproximación.
 
@@ -189,10 +191,12 @@ CHRONO/
 │   ├── ansi/        📜  Parser VT sobre `vte` — CSI, OSC, SGR, modos privados,
 │   │                    y respuestas al PTY (DA/DSR/CPR)
 │   ├── pty/         🔌  Shell real vía `portable-pty`, writer thread-safe
-│   ├── renderer/    🎨  Rasterización CPU con `fontdue`, tema OneDark Pro,
-│   │                    paleta xterm-256, render contextual
-│   └── app/         🪟  Event loop con `winit` + `softbuffer`, input, clipboard
+│   ├── renderer/    🎨  Rasterización CPU con `fontdue` + cache de glifos,
+│   │                    tema OneDark Pro, tab bar, fallback de fuentes
+│   └── app/         🪟  Event loop con `winit` + `softbuffer`: tabs,
+│   │                    mouse tracking, scrollback, input, clipboard
 │
+├── .github/         🤖  CI: fmt + clippy + tests en cada push
 ├── docs/            📖  Guías de smart rendering y sugerencias
 ├── examples/        🧪  Ejemplos de uso
 └── benches/         ⏱️  Benchmarks de renderizado
