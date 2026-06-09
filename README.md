@@ -6,7 +6,7 @@
 
 **Construido desde cero en Rust 🦀 — rápido, semántico y hermoso**
 
-[![CI](https://github.com/yoezequiel/CHRONO/actions/workflows/ci.yml/badge.svg)](https://github.com/yoezequiel/CHRONO/actions)
+[![CI](https://github.com/zeltri/CHRONO/actions/workflows/ci.yml/badge.svg)](https://github.com/zeltri/CHRONO/actions)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-67%20passing-brightgreen.svg)](#-desarrollo)
@@ -98,7 +98,7 @@ Todo sobre una base VT sólida: **CHRONO habla el protocolo de verdad**, no una 
 ### Desde el código fuente
 
 ```bash
-git clone https://github.com/yoezequiel/CHRONO.git
+git clone https://github.com/zeltri/CHRONO.git
 cd CHRONO
 cargo build --release
 
@@ -152,7 +152,7 @@ python script.py       # click en script.py:15 → se abre en tu editor
 ls -la                 # azul = directorios, verde = ejecutables, rojo = comprimidos
 
 # JSON con sintaxis
-curl -s https://api.github.com/repos/yoezequiel/CHRONO | head -20
+curl -s https://api.github.com/repos/zeltri/CHRONO | head -20
 ```
 
 ---
