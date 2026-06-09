@@ -1,21 +1,21 @@
-# Terminal Emulator - Configuración de ejemplo
-
-[terminal]
-# Número de líneas en el scrollback
-scrollback_lines = 10000
+# CHRONO - Configuración de ejemplo
+# Copiar a ~/.config/terminal-emulator/config.toml
 
 [font]
 # Tamaño de fuente en píxeles
 size = 16
+family = "Cascadia Code"
+
+[terminal]
+# Número de líneas en el scrollback
+scrollback_lines = 10000
+# Shell a ejecutar (comentado = usar $SHELL)
+# shell = "/bin/zsh"
 
 [colors]
-# Colores por defecto (paleta básica)
-foreground = [229, 229, 229]
-background = [0, 0, 0]
-
-[shell]
-# Shell por defecto (vacío = usar $SHELL o /bin/bash)
-command = ""
+# Colores por defecto
+foreground = [171, 178, 191]
+background = [40, 44, 52]
 
 [rendering]
 # Habilita detección inteligente de contenido (logs, JSON, tablas, stack traces)

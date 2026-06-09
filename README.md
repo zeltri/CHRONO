@@ -171,10 +171,8 @@ foreground = [171, 178, 191]  # #abb2bf
 background = [40, 44, 52]     # #282c34
 
 [terminal]
-scrollback = 10000
-
-[shell]
-program = "/bin/zsh"          # o bash, fish...
+scrollback_lines = 10000
+shell = "/bin/zsh"            # opcional; por defecto usa $SHELL
 ```
 
 ---
