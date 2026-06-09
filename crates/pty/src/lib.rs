@@ -8,13 +8,31 @@ use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::Read;
 use std::io::Write;
+use std::sync::{Arc, Mutex};
 
-#[cfg(unix)]
-use std::os::unix::io::FromRawFd;
+/// Handle clonable para escribir al PTY desde cualquier hilo
+#[derive(Clone)]
+pub struct PtyWriter {
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+}
+
+impl PtyWriter {
+    /// Escribe todos los bytes al PTY
+    pub fn write(&self, data: &[u8]) -> Result<usize> {
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("PTY writer lock poisoned"))?;
+        writer.write_all(data).context("Failed to write to PTY")?;
+        writer.flush().context("Failed to flush PTY")?;
+        Ok(data.len())
+    }
+}
 
 /// Wrapper para manejar PTY de forma multiplataforma
 pub struct Pty {
     master: Box<dyn MasterPty + Send>,
+    writer: PtyWriter,
     _child: Box<dyn Child + Send>,
 }
 
@@ -196,62 +214,11 @@ impl Pty {
         .join(":")
     }
 
-    /// Agrega el alias y LS_COLORS al archivo de configuración del shell si no existe
-    fn add_alias_to_shell_config() -> Result<()> {
-        let alias_line = "alias ls='ls --color=auto'";
-        let ls_colors = Self::generate_ls_colors();
-        let export_line = format!("export LS_COLORS='{}'", ls_colors);
-
-        if let Ok(home) = std::env::var("HOME") {
-            // Intentar agregar a .bashrc
-            let bashrc_path = format!("{}/.bashrc", home);
-            if let Ok(content) = std::fs::read_to_string(&bashrc_path) {
-                if !content.contains("alias ls='ls --color=auto'") {
-                    let mut file = std::fs::OpenOptions::new()
-                        .append(true)
-                        .open(&bashrc_path)?;
-                    writeln!(file, "\n# Agregado por terminal emulator")?;
-                    writeln!(file, "{}", alias_line)?;
-                    writeln!(file, "{}", export_line)?;
-                    log::info!("Alias y LS_COLORS agregado a {}", bashrc_path);
-                }
-            } else {
-                // Si no existe .bashrc, crearlo con el alias
-                let mut file = std::fs::File::create(&bashrc_path)?;
-                writeln!(file, "# Agregado por terminal emulator")?;
-                writeln!(file, "{}", alias_line)?;
-                writeln!(file, "{}", export_line)?;
-                log::info!("Creado {} con alias y LS_COLORS", bashrc_path);
-            }
-
-            // Intentar agregar a .zshrc
-            let zshrc_path = format!("{}/.zshrc", home);
-            if let Ok(content) = std::fs::read_to_string(&zshrc_path) {
-                if !content.contains("alias ls='ls --color=auto'") {
-                    let mut file = std::fs::OpenOptions::new().append(true).open(&zshrc_path)?;
-                    writeln!(file, "\n# Agregado por terminal emulator")?;
-                    writeln!(file, "{}", alias_line)?;
-                    writeln!(file, "{}", export_line)?;
-                    log::info!("Alias y LS_COLORS agregado a {}", zshrc_path);
-                }
-            } else {
-                // Si no existe .zshrc, crearlo con el alias
-                let mut file = std::fs::File::create(&zshrc_path)?;
-                writeln!(file, "# Agregado por terminal emulator")?;
-                writeln!(file, "{}", alias_line)?;
-                writeln!(file, "{}", export_line)?;
-                log::info!("Creado {} con alias y LS_COLORS", zshrc_path);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Crea un nuevo PTY y ejecuta el shell por defecto
+    /// Crea un nuevo PTY y ejecuta el shell por defecto.
+    ///
+    /// La configuración de colores (LS_COLORS) se pasa por variables de
+    /// entorno al proceso hijo: nunca se modifican los dotfiles del usuario.
     pub fn spawn_default_shell(rows: u16, cols: u16) -> Result<Self> {
-        // Agregar alias a los archivos de configuración del shell
-        let _ = Self::add_alias_to_shell_config();
-
         let pty_system = native_pty_system();
 
         let pty_size = PtySize {
@@ -276,6 +243,7 @@ impl Pty {
 
         let mut cmd = CommandBuilder::new(&shell);
         cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
 
         // Configurar LS_COLORS directamente en el entorno del shell
         let ls_colors = Self::generate_ls_colors();
@@ -290,10 +258,23 @@ impl Pty {
             .spawn_command(cmd)
             .context("Failed to spawn shell")?;
 
+        let writer = pair
+            .master
+            .take_writer()
+            .context("Failed to take PTY writer")?;
+
         Ok(Self {
             master: pair.master,
+            writer: PtyWriter {
+                writer: Arc::new(Mutex::new(writer)),
+            },
             _child: child,
         })
+    }
+
+    /// Obtiene un handle clonable para escribir al PTY desde otros hilos
+    pub fn writer(&self) -> PtyWriter {
+        self.writer.clone()
     }
 
     /// Lee datos del PTY (no bloqueante)
@@ -303,25 +284,8 @@ impl Pty {
     }
 
     /// Escribe datos al PTY
-    #[cfg(unix)]
     pub fn write(&mut self, data: &[u8]) -> Result<usize> {
-        use std::io::Write;
-
-        // En Unix, obtenemos el file descriptor y escribimos directamente
-        if let Some(fd) = self.master.as_raw_fd() {
-            let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-            let result = file.write(data);
-            std::mem::forget(file); // No cerrar el fd porque no es nuestro
-
-            result.context("Failed to write to PTY")
-        } else {
-            anyhow::bail!("PTY file descriptor not available")
-        }
-    }
-
-    #[cfg(not(unix))]
-    pub fn write(&mut self, _data: &[u8]) -> Result<usize> {
-        anyhow::bail!("Write not implemented for non-Unix platforms")
+        self.writer.write(data)
     }
 
     /// Redimensiona el PTY

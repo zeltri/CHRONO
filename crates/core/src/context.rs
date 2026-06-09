@@ -214,7 +214,7 @@ pub fn is_file_listing(text: &str) -> bool {
     }
 
     // Si pasa todas las verificaciones y tiene indicadores de archivo, aceptar
-    is_dir || has_extension || is_hidden || (text.len() > 0 && text.len() < 50)
+    is_dir || has_extension || is_hidden || (!text.is_empty() && text.len() < 50)
 }
 
 /// Extrae información de archivo desde una línea de ls -l

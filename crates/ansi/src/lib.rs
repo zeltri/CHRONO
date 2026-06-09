@@ -25,13 +25,19 @@ impl AnsiParser {
         }
     }
 
-    /// Procesa bytes de entrada y actualiza la pantalla
-    pub fn process(&mut self, data: &[u8], screen: &mut Screen) {
-        let mut handler = AnsiHandler::new(screen);
+    /// Procesa bytes de entrada y actualiza la pantalla.
+    ///
+    /// Devuelve las respuestas que el terminal debe enviar de vuelta al PTY
+    /// (por ejemplo, Device Attributes o Cursor Position Report).
+    pub fn process(&mut self, data: &[u8], screen: &mut Screen) -> Vec<u8> {
+        let mut responses = Vec::new();
+        let mut handler = AnsiHandler::new(screen, &mut responses);
 
         for byte in data {
             self.parser.advance(&mut handler, *byte);
         }
+
+        responses
     }
 }
 

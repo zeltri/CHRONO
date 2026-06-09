@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct Config {
     #[serde(default)]
     pub font: FontConfig,
@@ -62,16 +63,6 @@ pub struct RenderingConfig {
     pub table_detection: bool,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            font: FontConfig::default(),
-            colors: ColorsConfig::default(),
-            terminal: TerminalConfig::default(),
-            rendering: RenderingConfig::default(),
-        }
-    }
-}
 
 impl Default for FontConfig {
     fn default() -> Self {

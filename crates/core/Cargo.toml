@@ -8,3 +8,4 @@ license.workspace = true
 [dependencies]
 unicode-width.workspace = true
 regex = "1.10"
+log.workspace = true

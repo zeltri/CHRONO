@@ -32,7 +32,7 @@ impl CommandHistory {
         let is_zsh = shell.contains("zsh");
         let is_bash = shell.contains("bash");
 
-        eprintln!(
+        log::trace!(
             "[HISTORIAL] Shell detectado: {} (zsh={}, bash={})",
             shell, is_zsh, is_bash
         );
@@ -42,18 +42,18 @@ impl CommandHistory {
             // Usuario usa zsh, intentar cargar .zsh_history
             let zsh_path = Self::get_home_path(".zsh_history");
             if let Some(path) = zsh_path {
-                eprintln!("[HISTORIAL] Intentando cargar: {:?}", path);
+                log::trace!("[HISTORIAL] Intentando cargar: {:?}", path);
                 match Self::read_file_lossy(&path) {
                     Ok(content) => {
                         self.parse_zsh_history(&content);
-                        eprintln!(
+                        log::trace!(
                             "[HISTORIAL] ✓ Cargados {} comandos desde zsh",
                             self.commands.len()
                         );
                         return;
                     }
                     Err(e) => {
-                        eprintln!("[HISTORIAL] ✗ Error leyendo archivo zsh: {}", e);
+                        log::trace!("[HISTORIAL] ✗ Error leyendo archivo zsh: {}", e);
                     }
                 }
             }
@@ -61,18 +61,18 @@ impl CommandHistory {
             // Usuario usa bash, intentar cargar .bash_history
             let bash_path = Self::get_home_path(".bash_history");
             if let Some(path) = bash_path {
-                eprintln!("[HISTORIAL] Intentando cargar: {:?}", path);
+                log::trace!("[HISTORIAL] Intentando cargar: {:?}", path);
                 match Self::read_file_lossy(&path) {
                     Ok(content) => {
                         self.parse_bash_history(&content);
-                        eprintln!(
+                        log::trace!(
                             "[HISTORIAL] ✓ Cargados {} comandos desde bash",
                             self.commands.len()
                         );
                         return;
                     }
                     Err(e) => {
-                        eprintln!("[HISTORIAL] ✗ Error leyendo archivo bash: {}", e);
+                        log::trace!("[HISTORIAL] ✗ Error leyendo archivo bash: {}", e);
                     }
                 }
             }
@@ -81,10 +81,10 @@ impl CommandHistory {
         // Fallback: intentar primero zsh, luego bash
         let zsh_path = Self::get_home_path(".zsh_history");
         if let Some(path) = zsh_path {
-            eprintln!("[HISTORIAL] Fallback - Intentando cargar: {:?}", path);
+            log::trace!("[HISTORIAL] Fallback - Intentando cargar: {:?}", path);
             if let Ok(content) = Self::read_file_lossy(&path) {
                 self.parse_zsh_history(&content);
-                eprintln!(
+                log::trace!(
                     "[HISTORIAL] ✓ Cargados {} comandos desde zsh (fallback)",
                     self.commands.len()
                 );
@@ -95,10 +95,10 @@ impl CommandHistory {
         // Si no hay zsh, intentar bash
         let bash_path = Self::get_home_path(".bash_history");
         if let Some(path) = bash_path {
-            eprintln!("[HISTORIAL] Fallback - Intentando cargar: {:?}", path);
+            log::trace!("[HISTORIAL] Fallback - Intentando cargar: {:?}", path);
             if let Ok(content) = Self::read_file_lossy(&path) {
                 self.parse_bash_history(&content);
-                eprintln!(
+                log::trace!(
                     "[HISTORIAL] ✓ Cargados {} comandos desde bash (fallback)",
                     self.commands.len()
                 );
@@ -173,9 +173,9 @@ impl CommandHistory {
         }
 
         // Debug: mostrar últimos 10 comandos únicos
-        eprintln!("[HISTORIAL] Últimos 10 comandos únicos (más reciente al final del array):");
+        log::trace!("[HISTORIAL] Últimos 10 comandos únicos (más reciente al final del array):");
         for (i, cmd) in self.commands.iter().rev().take(10).enumerate() {
-            eprintln!("  {} posiciones desde el final: {}", i, cmd);
+            log::trace!("  {} posiciones desde el final: {}", i, cmd);
         }
     }
 
@@ -248,9 +248,9 @@ impl CommandHistory {
                         file.write_all(line.as_bytes())
                     })
                 {
-                    eprintln!("[HISTORIAL] Error guardando en archivo zsh: {}", e);
+                    log::trace!("[HISTORIAL] Error guardando en archivo zsh: {}", e);
                 } else {
-                    eprintln!("[HISTORIAL] Comando guardado en .zsh_history: {}", command);
+                    log::trace!("[HISTORIAL] Comando guardado en .zsh_history: {}", command);
                 }
             }
         } else if is_bash {
@@ -268,9 +268,9 @@ impl CommandHistory {
                         file.write_all(line.as_bytes())
                     })
                 {
-                    eprintln!("[HISTORIAL] Error guardando en archivo bash: {}", e);
+                    log::trace!("[HISTORIAL] Error guardando en archivo bash: {}", e);
                 } else {
-                    eprintln!("[HISTORIAL] Comando guardado en .bash_history: {}", command);
+                    log::trace!("[HISTORIAL] Comando guardado en .bash_history: {}", command);
                 }
             }
         }
@@ -282,7 +282,7 @@ impl CommandHistory {
             return None;
         }
 
-        eprintln!(
+        log::trace!(
             "[HISTORIAL] Buscando sugerencia para: '{}' (historial tiene {} comandos)",
             prefix,
             self.commands.len()
@@ -296,7 +296,7 @@ impl CommandHistory {
             .filter(|cmd| cmd.starts_with(prefix) && cmd.len() > prefix.len())
             .take(5)
             .collect();
-        eprintln!(
+        log::trace!(
             "[HISTORIAL] Comandos que coinciden (más reciente primero): {:?}",
             matching
         );
@@ -309,7 +309,7 @@ impl CommandHistory {
             .find(|cmd| cmd.starts_with(prefix) && cmd.len() > prefix.len())
             .map(|cmd| cmd[prefix.len()..].to_string());
 
-        eprintln!("[HISTORIAL] Resultado seleccionado: {:?}", result);
+        log::trace!("[HISTORIAL] Resultado seleccionado: {:?}", result);
         result
     }
 

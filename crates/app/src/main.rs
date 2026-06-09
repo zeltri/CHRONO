@@ -88,16 +88,16 @@ fn copy_to_clipboard(text: &str) -> Result<()> {
         Ok(mut clipboard) => match clipboard.set_text(text) {
             Ok(_) => {
                 log::info!("Text copied to clipboard using arboard");
-                return Ok(());
+                Ok(())
             }
             Err(e) => {
                 log::error!("Arboard failed: {}", e);
-                return Err(anyhow::anyhow!("Failed to copy: {}", e));
+                Err(anyhow::anyhow!("Failed to copy: {}", e))
             }
         },
         Err(e) => {
             log::error!("Could not create clipboard: {}", e);
-            return Err(anyhow::anyhow!("Failed to create clipboard: {}", e));
+            Err(anyhow::anyhow!("Failed to create clipboard: {}", e))
         }
     }
 }
@@ -165,6 +165,7 @@ fn main() -> Result<()> {
     let screen_clone = Arc::clone(&screen);
     let window_clone = Arc::clone(&window);
     let mut pty_reader = pty.take_reader();
+    let pty_writer = pty.writer();
     thread::spawn(move || {
         let mut parser = AnsiParser::new();
         let mut buffer = [0u8; 4096];
@@ -175,8 +176,21 @@ fn main() -> Result<()> {
             match pty_reader.read(&mut buffer) {
                 Ok(n) if n > 0 => {
                     let mut screen = screen_clone.lock().unwrap();
-                    parser.process(&buffer[..n], &mut screen);
+                    let responses = parser.process(&buffer[..n], &mut screen);
+                    let title = screen.take_title();
                     drop(screen); // Liberar lock antes de request_redraw
+
+                    // Responder consultas del terminal (DA, DSR, CPR)
+                    if !responses.is_empty() {
+                        if let Err(e) = pty_writer.write(&responses) {
+                            log::error!("Error writing terminal response: {}", e);
+                        }
+                    }
+
+                    // Aplicar título de ventana solicitado por OSC 0/2
+                    if let Some(title) = title {
+                        window_clone.set_title(&title);
+                    }
 
                     // Notificar al event loop que hay cambios
                     window_clone.request_redraw();
@@ -365,7 +379,17 @@ fn main() -> Result<()> {
                         if let Ok(clipboard_text) =
                             arboard::Clipboard::new().and_then(|mut cb| cb.get_text())
                         {
-                            if let Err(e) = pty.write(clipboard_text.as_bytes()) {
+                            // Bracketed paste: envolver el texto si la app lo pidió (modo 2004)
+                            let bracketed = screen.lock().unwrap().bracketed_paste;
+                            let payload = if bracketed {
+                                let mut bytes = b"\x1b[200~".to_vec();
+                                bytes.extend_from_slice(clipboard_text.as_bytes());
+                                bytes.extend_from_slice(b"\x1b[201~");
+                                bytes
+                            } else {
+                                clipboard_text.into_bytes()
+                            };
+                            if let Err(e) = pty.write(&payload) {
                                 log::error!("Error pasting text: {}", e);
                             }
                         }

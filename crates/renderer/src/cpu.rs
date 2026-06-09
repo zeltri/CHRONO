@@ -139,7 +139,7 @@ impl CpuRenderer {
                         .any(|f| col_idx >= f.start_col && col_idx < f.end_col);
 
                 // Determinar si esta celda es parte de un archivo listado
-                let is_file_entry = file_entry.as_ref().map_or(false, |entry| {
+                let is_file_entry = file_entry.as_ref().is_some_and(|entry| {
                     col_idx >= entry.start_col && col_idx < entry.end_col
                 });
 
@@ -151,10 +151,12 @@ impl CpuRenderer {
                 // Verificar si esta celda está seleccionada
                 let is_selected = screen.is_selected(row_idx, col_idx);
 
-                // Renderizar fondo de celda
+                // Renderizar fondo de celda (con soporte de video inverso, SGR 7)
                 let bg = if is_selected {
                     // Color de fondo para selección (azul oscuro semi-transparente)
                     self.theme.selection_bg_u32()
+                } else if cell.attrs.reverse {
+                    self.color_to_u32(cell.attrs.fg_color)
                 } else {
                     self.color_to_u32(cell.attrs.bg_color)
                 };
@@ -162,7 +164,9 @@ impl CpuRenderer {
 
                 // Renderizar el carácter con color contextual
                 if cell.character != ' ' {
-                    let fg = if cell.is_suggestion {
+                    let fg = if cell.attrs.reverse {
+                        self.bg_color_to_u32(cell.attrs.bg_color)
+                    } else if cell.is_suggestion {
                         // Sugerencias de autocompletado en gris claro
                         self.theme.fg_suggestion_u32()
                     } else if is_link {
@@ -243,6 +247,14 @@ impl CpuRenderer {
             terminal_core::Color::Indexed(idx) => self.theme.get_ansi_color(idx),
             terminal_core::Color::Rgb(r, g, b) => ModernTheme::rgb_to_u32(r, g, b),
             terminal_core::Color::Default => self.theme.fg_primary_u32(),
+        }
+    }
+
+    /// Como color_to_u32, pero Default mapea al fondo del tema (para video inverso)
+    fn bg_color_to_u32(&self, color: terminal_core::Color) -> u32 {
+        match color {
+            terminal_core::Color::Default => self.theme.bg_primary_u32(),
+            other => self.color_to_u32(other),
         }
     }
 

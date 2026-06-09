@@ -7,6 +7,21 @@ use crate::{
     history::CommandHistory,
 };
 
+/// Estado guardado de la pantalla principal mientras la pantalla alternativa está activa
+struct MainScreenState {
+    grid: Vec<Vec<Cell>>,
+    cursor: Cursor,
+    attrs: CellAttributes,
+}
+
+/// Cursor guardado por DECSC / CSI s
+#[derive(Clone, Copy)]
+struct SavedCursor {
+    row: usize,
+    col: usize,
+    attrs: CellAttributes,
+}
+
 /// Buffer de pantalla de terminal
 pub struct Screen {
     /// Dimensiones
@@ -34,8 +49,27 @@ pub struct Screen {
     /// Cache de ContentType detectado por línea (para evitar re-análisis costosos)
     pub content_type_cache: Vec<Option<ContentType>>,
 
-    /// Marca si la línea necesita limpieza después de carriage return
-    line_needs_clear: Vec<bool>,
+    /// Región de scroll (DECSTBM): primera y última fila, inclusive
+    scroll_top: usize,
+    scroll_bottom: usize,
+
+    /// Estado de la pantalla principal mientras la alternativa está activa
+    alt_screen: Option<MainScreenState>,
+
+    /// Cursor guardado (DECSC / CSI s)
+    saved_cursor: Option<SavedCursor>,
+
+    /// Último carácter imprimible escrito (para REP, CSI b)
+    last_char: Option<char>,
+
+    /// Modo de bracketed paste (DECSET 2004)
+    pub bracketed_paste: bool,
+
+    /// Auto-wrap (DECAWM, modo 7)
+    pub autowrap: bool,
+
+    /// Título de ventana pendiente (OSC 0/2), consumido por la app
+    pending_title: Option<String>,
 
     /// Modo de sugerencia activo (para autocompletado)
     suggestion_mode: bool,
@@ -85,7 +119,14 @@ impl Screen {
             max_scrollback: 10_000,
             line_contexts: vec![LineContext::Normal; rows],
             content_type_cache: vec![None; rows],
-            line_needs_clear: vec![false; rows],
+            scroll_top: 0,
+            scroll_bottom: rows.saturating_sub(1),
+            alt_screen: None,
+            saved_cursor: None,
+            last_char: None,
+            bracketed_paste: false,
+            autowrap: true,
+            pending_title: None,
             suggestion_mode: false,
             suggestion_start_col: 0,
             command_history: CommandHistory::from_shell_history(1000),
@@ -112,21 +153,46 @@ impl Screen {
         self.dirty = true;
     }
 
+    /// Celda en blanco con el color de fondo actual (Background Color Erase)
+    fn blank_cell(&self) -> Cell {
+        let attrs = CellAttributes {
+            bg_color: self.current_attrs.bg_color,
+            ..CellAttributes::default()
+        };
+        Cell::with_attrs(' ', attrs)
+    }
+
+    /// Línea en blanco con el color de fondo actual
+    fn blank_line(&self) -> Vec<Cell> {
+        vec![self.blank_cell(); self.cols]
+    }
+
+    /// Invalida el cache de detección de contenido de una línea
+    fn invalidate_line(&mut self, row: usize) {
+        if row < self.content_type_cache.len() {
+            self.content_type_cache[row] = None;
+        }
+    }
+
+    /// Invalida el cache de todas las líneas (tras scroll u operaciones estructurales)
+    fn invalidate_all_lines(&mut self) {
+        for entry in &mut self.content_type_cache {
+            *entry = None;
+        }
+    }
+
     /// Escribe un carácter en la posición del cursor
     pub fn write_char(&mut self, ch: char) {
         self.mark_dirty();
-
-        // Invalidar cache de content type para esta línea
-        if self.cursor.row < self.content_type_cache.len() {
-            self.content_type_cache[self.cursor.row] = None;
-        }
+        self.last_char = Some(ch);
+        self.invalidate_line(self.cursor.row);
 
         if self.cursor.col >= self.cols {
-            self.cursor.carriage_return();
-            self.cursor.line_feed(self.rows - 1);
-            if self.cursor.row >= self.rows {
-                self.scroll_up(1);
-                self.cursor.row = self.rows - 1;
+            if self.autowrap {
+                self.cursor.col = 0;
+                self.index();
+            } else {
+                self.cursor.col = self.cols - 1;
             }
         }
 
@@ -137,27 +203,8 @@ impl Screen {
                 self.clear_suggestions();
             }
 
-            // Si la línea está marcada para limpieza y estamos al principio, limpiarla
-            if self.line_needs_clear[self.cursor.row] && self.cursor.col == 0 {
-                // Limpiar esta línea y todas las siguientes que estén marcadas
-                self.clear_line();
-                self.line_needs_clear[self.cursor.row] = false;
-
-                // Limpiar líneas consecutivas marcadas
-                for row in (self.cursor.row + 1)..self.rows {
-                    if self.line_needs_clear[row] {
-                        for col in 0..self.cols {
-                            self.grid[row][col] = Cell::empty();
-                        }
-                        self.line_needs_clear[row] = false;
-                    } else {
-                        break; // Dejar de limpiar si encontramos una línea no marcada
-                    }
-                }
-            }
-
             let mut cell = Cell::with_attrs(ch, self.current_attrs);
-            let width = cell.width as usize;
+            let width = (cell.width as usize).max(1);
 
             // Si estamos en modo sugerencia, marcar la celda
             if self.suggestion_mode {
@@ -180,87 +227,253 @@ impl Screen {
         }
     }
 
-    /// Line feed - avanza una línea
-    pub fn line_feed(&mut self) {
+    /// Repite el último carácter impreso n veces (REP, CSI b)
+    pub fn repeat_last_char(&mut self, n: usize) {
+        if let Some(ch) = self.last_char {
+            for _ in 0..n {
+                self.write_char(ch);
+            }
+        }
+    }
+
+    /// Index (IND): baja una línea, haciendo scroll si está al final de la región
+    pub fn index(&mut self) {
         self.mark_dirty();
+        if self.cursor.row == self.scroll_bottom {
+            self.scroll_up(1);
+        } else if self.cursor.row < self.rows - 1 {
+            self.cursor.row += 1;
+        }
+    }
+
+    /// Reverse Index (RI): sube una línea, haciendo scroll inverso si está al inicio de la región
+    pub fn reverse_index(&mut self) {
+        self.mark_dirty();
+        if self.cursor.row == self.scroll_top {
+            self.scroll_down(1);
+        } else if self.cursor.row > 0 {
+            self.cursor.row -= 1;
+        }
+    }
+
+    /// Next Line (NEL): carriage return + index
+    pub fn next_line(&mut self) {
+        self.carriage_return();
+        self.index();
+    }
+
+    /// Line feed - avanza una línea (respetando la región de scroll)
+    pub fn line_feed(&mut self) {
         // Limpiar sugerencia activa
         self.active_suggestion = None;
-
-        // NO analizar contexto de la línea actual aquí
-        // porque los comandos del usuario NO deben ser detectados como stack traces
-        // El contexto se actualizará cuando el output del comando se escriba
-
-        if self.cursor.row < self.rows - 1 {
-            self.cursor.row += 1;
-        } else {
-            self.scroll_up(1);
-        }
-
-        // Restablecer atributos después del line feed para evitar que
-        // los colores del output anterior afecten el nuevo prompt
-        self.current_attrs = CellAttributes::default();
+        self.index();
     }
 
     /// Carriage return - vuelve al inicio de la línea
     pub fn carriage_return(&mut self) {
-        // Resetear comando actual
-        self.current_command.clear();
-        self.active_suggestion = None;
-
-        // Restablecer atributos de color para evitar que los colores del prompt
-        // persistan en el texto del usuario
-        self.current_attrs = CellAttributes::default();
-
-        // Si no estamos en la última línea y volvemos al inicio,
-        // probablemente es porque se va a escribir nuevo contenido que
-        // reemplaza al anterior (como después de un tab completion)
-        if self.cursor.row < self.rows && self.cursor.col > 0 {
-            // Marcar esta línea y todas las siguientes para limpieza
-            for row in self.cursor.row..self.rows {
-                if row < self.line_needs_clear.len() {
-                    self.line_needs_clear[row] = true;
-                }
-            }
+        if self.cursor.col != 0 {
+            self.mark_dirty();
         }
         self.cursor.col = 0;
     }
 
-    /// Scroll hacia arriba n líneas
+    /// Scroll hacia arriba n líneas dentro de la región de scroll
     pub fn scroll_up(&mut self, n: usize) {
         self.mark_dirty();
-        for _ in 0..n {
-            if !self.grid.is_empty() {
-                let line = self.grid.remove(0);
-                self.scrollback.push(line);
+        self.invalidate_all_lines();
+        let full_screen = self.scroll_top == 0 && self.scroll_bottom == self.rows - 1;
 
-                // Limitar scrollback
+        for _ in 0..n {
+            if self.scroll_top > self.scroll_bottom || self.scroll_bottom >= self.grid.len() {
+                break;
+            }
+            let line = self.grid.remove(self.scroll_top);
+
+            // Solo guardar en scrollback si es pantalla principal y región completa
+            if full_screen && self.alt_screen.is_none() {
+                self.scrollback.push(line);
                 if self.scrollback.len() > self.max_scrollback {
                     self.scrollback.remove(0);
                 }
-
-                // Agregar línea vacía al final
-                self.grid.push(vec![Cell::empty(); self.cols]);
             }
+
+            self.grid.insert(self.scroll_bottom, self.blank_line());
+        }
+    }
+
+    /// Scroll hacia abajo n líneas dentro de la región de scroll
+    pub fn scroll_down(&mut self, n: usize) {
+        self.mark_dirty();
+        self.invalidate_all_lines();
+
+        for _ in 0..n {
+            if self.scroll_top > self.scroll_bottom || self.scroll_bottom >= self.grid.len() {
+                break;
+            }
+            self.grid.remove(self.scroll_bottom);
+            self.grid.insert(self.scroll_top, self.blank_line());
+        }
+    }
+
+    /// Define la región de scroll (DECSTBM). Filas en base 0, inclusive.
+    pub fn set_scroll_region(&mut self, top: usize, bottom: usize) {
+        if top < bottom && bottom < self.rows {
+            self.scroll_top = top;
+            self.scroll_bottom = bottom;
+        } else {
+            self.scroll_top = 0;
+            self.scroll_bottom = self.rows.saturating_sub(1);
+        }
+        // Per spec, el cursor vuelve al origen
+        self.cursor.row = 0;
+        self.cursor.col = 0;
+        self.mark_dirty();
+    }
+
+    /// Inserta n líneas en blanco en la posición del cursor (IL)
+    pub fn insert_lines(&mut self, n: usize) {
+        if self.cursor.row < self.scroll_top || self.cursor.row > self.scroll_bottom {
+            return;
+        }
+        self.mark_dirty();
+        self.invalidate_all_lines();
+        for _ in 0..n.min(self.scroll_bottom - self.cursor.row + 1) {
+            self.grid.remove(self.scroll_bottom);
+            self.grid.insert(self.cursor.row, self.blank_line());
+        }
+    }
+
+    /// Elimina n líneas en la posición del cursor (DL)
+    pub fn delete_lines(&mut self, n: usize) {
+        if self.cursor.row < self.scroll_top || self.cursor.row > self.scroll_bottom {
+            return;
+        }
+        self.mark_dirty();
+        self.invalidate_all_lines();
+        for _ in 0..n.min(self.scroll_bottom - self.cursor.row + 1) {
+            self.grid.remove(self.cursor.row);
+            self.grid.insert(self.scroll_bottom, self.blank_line());
+        }
+    }
+
+    /// Inserta n celdas en blanco en el cursor, desplazando el resto a la derecha (ICH)
+    pub fn insert_chars(&mut self, n: usize) {
+        if self.cursor.row >= self.rows {
+            return;
+        }
+        self.mark_dirty();
+        self.invalidate_line(self.cursor.row);
+        let row = &mut self.grid[self.cursor.row];
+        for _ in 0..n.min(self.cols - self.cursor.col) {
+            row.pop();
+            row.insert(self.cursor.col, Cell::empty());
+        }
+    }
+
+    /// Elimina n celdas en el cursor, desplazando el resto a la izquierda (DCH)
+    pub fn delete_chars(&mut self, n: usize) {
+        if self.cursor.row >= self.rows {
+            return;
+        }
+        self.mark_dirty();
+        self.invalidate_line(self.cursor.row);
+        let blank = self.blank_cell();
+        let row = &mut self.grid[self.cursor.row];
+        for _ in 0..n.min(self.cols - self.cursor.col) {
+            row.remove(self.cursor.col);
+            row.push(blank.clone());
+        }
+    }
+
+    /// Borra n celdas desde el cursor sin desplazar (ECH)
+    pub fn erase_chars(&mut self, n: usize) {
+        if self.cursor.row >= self.rows {
+            return;
+        }
+        self.mark_dirty();
+        self.invalidate_line(self.cursor.row);
+        let blank = self.blank_cell();
+        let end = (self.cursor.col + n).min(self.cols);
+        for col in self.cursor.col..end {
+            self.grid[self.cursor.row][col] = blank.clone();
+        }
+    }
+
+    /// Borrado en pantalla (ED). Modos: 0 = cursor→final, 1 = inicio→cursor, 2 = todo, 3 = todo + scrollback
+    pub fn erase_in_display(&mut self, mode: u16) {
+        self.mark_dirty();
+        self.invalidate_all_lines();
+        match mode {
+            0 => {
+                self.clear_line_right();
+                let blank = self.blank_cell();
+                for row in (self.cursor.row + 1)..self.rows {
+                    for col in 0..self.cols {
+                        self.grid[row][col] = blank.clone();
+                    }
+                }
+            }
+            1 => {
+                let blank = self.blank_cell();
+                for row in 0..self.cursor.row {
+                    for col in 0..self.cols {
+                        self.grid[row][col] = blank.clone();
+                    }
+                }
+                let end = (self.cursor.col + 1).min(self.cols);
+                for col in 0..end {
+                    self.grid[self.cursor.row][col] = blank.clone();
+                }
+            }
+            2 => self.clear(),
+            3 => {
+                self.clear();
+                self.scrollback.clear();
+            }
+            _ => {}
+        }
+    }
+
+    /// Borrado en línea (EL). Modos: 0 = cursor→final, 1 = inicio→cursor, 2 = línea completa
+    pub fn erase_in_line(&mut self, mode: u16) {
+        match mode {
+            0 => self.clear_line_right(),
+            1 => {
+                self.mark_dirty();
+                self.invalidate_line(self.cursor.row);
+                if self.cursor.row < self.rows {
+                    let blank = self.blank_cell();
+                    let end = (self.cursor.col + 1).min(self.cols);
+                    for col in 0..end {
+                        self.grid[self.cursor.row][col] = blank.clone();
+                    }
+                }
+            }
+            2 => self.clear_line(),
+            _ => {}
         }
     }
 
     /// Limpia la pantalla
     pub fn clear(&mut self) {
+        self.mark_dirty();
+        self.invalidate_all_lines();
+        let blank = self.blank_cell();
         for row in &mut self.grid {
             for cell in row {
-                *cell = Cell::empty();
+                *cell = blank.clone();
             }
         }
-        // Restablecer los atributos actuales al limpiar la pantalla
-        self.current_attrs = CellAttributes::default();
     }
 
     /// Limpia desde el cursor hasta el final de la línea
     pub fn clear_line_right(&mut self) {
         self.mark_dirty();
+        self.invalidate_line(self.cursor.row);
         if self.cursor.row < self.rows {
+            let blank = self.blank_cell();
             for col in self.cursor.col..self.cols {
-                self.grid[self.cursor.row][col] = Cell::empty();
+                self.grid[self.cursor.row][col] = blank.clone();
             }
         }
     }
@@ -268,28 +481,115 @@ impl Screen {
     /// Limpia toda la línea actual
     pub fn clear_line(&mut self) {
         self.mark_dirty();
+        self.invalidate_line(self.cursor.row);
         if self.cursor.row < self.rows {
+            let blank = self.blank_cell();
             for col in 0..self.cols {
-                self.grid[self.cursor.row][col] = Cell::empty();
+                self.grid[self.cursor.row][col] = blank.clone();
             }
         }
     }
 
     /// Limpia desde la línea actual hasta el final de la pantalla
     pub fn clear_to_end_of_screen(&mut self) {
-        self.mark_dirty();
-        // Limpiar desde cursor hasta final de la línea actual
-        self.clear_line_right();
+        self.erase_in_display(0);
+    }
 
-        // Limpiar todas las líneas siguientes
-        for row in (self.cursor.row + 1)..self.rows {
-            for col in 0..self.cols {
-                self.grid[row][col] = Cell::empty();
-            }
-            if row < self.line_needs_clear.len() {
-                self.line_needs_clear[row] = false;
-            }
+    /// Guarda posición del cursor y atributos (DECSC)
+    pub fn save_cursor(&mut self) {
+        self.saved_cursor = Some(SavedCursor {
+            row: self.cursor.row,
+            col: self.cursor.col,
+            attrs: self.current_attrs,
+        });
+    }
+
+    /// Restaura posición del cursor y atributos (DECRC)
+    pub fn restore_cursor(&mut self) {
+        if let Some(saved) = self.saved_cursor {
+            self.cursor.row = saved.row.min(self.rows.saturating_sub(1));
+            self.cursor.col = saved.col.min(self.cols.saturating_sub(1));
+            self.current_attrs = saved.attrs;
+            self.mark_dirty();
         }
+    }
+
+    /// Activa la pantalla alternativa (usada por vim, less, htop, etc.)
+    pub fn enter_alt_screen(&mut self) {
+        if self.alt_screen.is_some() {
+            return;
+        }
+        self.mark_dirty();
+        self.invalidate_all_lines();
+        let main_grid = std::mem::replace(&mut self.grid, vec![vec![Cell::empty(); self.cols]; self.rows]);
+        self.alt_screen = Some(MainScreenState {
+            grid: main_grid,
+            cursor: self.cursor,
+            attrs: self.current_attrs,
+        });
+        self.cursor.row = 0;
+        self.cursor.col = 0;
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows.saturating_sub(1);
+    }
+
+    /// Vuelve a la pantalla principal, restaurando su contenido
+    pub fn exit_alt_screen(&mut self) {
+        if let Some(mut state) = self.alt_screen.take() {
+            self.mark_dirty();
+            self.invalidate_all_lines();
+
+            // Ajustar el grid guardado a las dimensiones actuales (por si hubo resize)
+            state.grid.resize(self.rows, vec![Cell::empty(); self.cols]);
+            for row in &mut state.grid {
+                row.resize(self.cols, Cell::empty());
+            }
+
+            self.grid = state.grid;
+            self.cursor.row = state.cursor.row.min(self.rows.saturating_sub(1));
+            self.cursor.col = state.cursor.col.min(self.cols.saturating_sub(1));
+            self.cursor.visible = true;
+            self.current_attrs = state.attrs;
+            self.scroll_top = 0;
+            self.scroll_bottom = self.rows.saturating_sub(1);
+        }
+    }
+
+    /// Indica si la pantalla alternativa está activa
+    pub fn is_alt_screen(&self) -> bool {
+        self.alt_screen.is_some()
+    }
+
+    /// Reset completo del terminal (RIS)
+    pub fn reset(&mut self) {
+        self.exit_alt_screen();
+        self.cursor = Cursor::new();
+        self.current_attrs = CellAttributes::default();
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows.saturating_sub(1);
+        self.saved_cursor = None;
+        self.bracketed_paste = false;
+        self.autowrap = true;
+        self.last_char = None;
+        self.clear();
+    }
+
+    /// Cambia la visibilidad del cursor (DECTCEM)
+    pub fn set_cursor_visible(&mut self, visible: bool) {
+        if self.cursor.visible != visible {
+            self.cursor.visible = visible;
+            self.mark_dirty();
+        }
+    }
+
+    /// Define el título de ventana solicitado (OSC 0/2)
+    pub fn set_title(&mut self, title: String) {
+        self.pending_title = Some(title);
+    }
+
+    /// Consume el título pendiente, si lo hay (lo lee la app)
+    pub fn take_title(&mut self) -> Option<String> {
+        self.pending_title.take()
     }
 
     /// Obtiene el contenido visible
@@ -322,7 +622,9 @@ impl Screen {
         // Si hay menos filas, mover las eliminadas al scrollback
         while self.grid.len() > new_rows {
             let line = self.grid.remove(0);
-            self.scrollback.push(line);
+            if self.alt_screen.is_none() {
+                self.scrollback.push(line);
+            }
         }
 
         // Si hay más filas, agregar vacías
@@ -338,10 +640,14 @@ impl Screen {
         self.rows = new_rows;
         self.cols = new_cols;
 
-        // Ajustar contextos de línea y flags
+        // La región de scroll vuelve a ocupar toda la pantalla
+        self.scroll_top = 0;
+        self.scroll_bottom = new_rows.saturating_sub(1);
+
+        // Ajustar contextos de línea y caches
         self.line_contexts.resize(new_rows, LineContext::Normal);
         self.content_type_cache.resize(new_rows, None);
-        self.line_needs_clear.resize(new_rows, false);
+        self.invalidate_all_lines();
 
         // Limitar cursor
         if self.cursor.row >= new_rows {
@@ -391,8 +697,8 @@ impl Screen {
 
     /// Actualiza la sugerencia automática basada en el historial
     fn update_auto_suggestion(&mut self) {
-        eprintln!(
-            "[SCREEN] update_auto_suggestion llamado, current_command: '{}'",
+        log::trace!(
+            "update_auto_suggestion, current_command: '{}'",
             self.current_command
         );
 
@@ -401,10 +707,15 @@ impl Screen {
             self.clear_auto_suggestion();
         }
 
+        // No mostrar sugerencias en la pantalla alternativa (vim, htop, etc.)
+        if self.alt_screen.is_some() {
+            return;
+        }
+
         // Buscar sugerencia en historial
         if let Some(suggestion) = self.command_history.find_suggestion(&self.current_command) {
-            eprintln!(
-                "[SCREEN] Mostrando sugerencia: '{}' después de col {} + len {}",
+            log::trace!(
+                "Mostrando sugerencia: '{}' después de col {} + len {}",
                 suggestion,
                 self.command_start_col,
                 self.current_command.len()
@@ -421,14 +732,11 @@ impl Screen {
                     let mut cell = Cell::as_suggestion(ch);
                     cell.attrs = self.current_attrs;
                     self.grid[self.cursor.row][col] = cell;
-                    eprintln!(
-                        "[SCREEN] Escribiendo '{}' en col {} con is_suggestion=true",
-                        ch, col
-                    );
                 } else {
                     break;
                 }
             }
+            self.mark_dirty();
         }
     }
 
@@ -443,6 +751,7 @@ impl Screen {
                 }
             }
             self.active_suggestion = None;
+            self.mark_dirty();
         }
     }
 
@@ -468,18 +777,19 @@ impl Screen {
 
             // Limpiar sugerencia activa
             self.active_suggestion = None;
+            self.mark_dirty();
         }
     }
 
     /// Acepta la sugerencia sin renderizar (el PTY hará el eco)
     /// Solo actualiza el current_command y limpia la sugerencia visual
     pub fn accept_suggestion_for_pty(&mut self) {
-        if let Some(suggestion) = &self.active_suggestion {
+        if self.active_suggestion.is_some() {
             // Agregar la sugerencia al comando actual
-            self.current_command.push_str(suggestion);
-
+            let suggestion = self.active_suggestion.clone().unwrap_or_default();
             // Limpiar la sugerencia visual (el eco del PTY la escribirá)
             self.clear_auto_suggestion();
+            self.current_command.push_str(&suggestion);
         }
     }
 
@@ -495,17 +805,9 @@ impl Screen {
             // Si es el primer carácter del comando, guardar posición inicial
             if self.current_command.is_empty() {
                 self.command_start_col = self.cursor.col;
-                eprintln!(
-                    "[SCREEN] Iniciando comando en col {}",
-                    self.command_start_col
-                );
             }
 
             self.current_command.push(ch);
-            eprintln!(
-                "[SCREEN] add_user_input: '{}' -> current_command: '{}'",
-                ch, self.current_command
-            );
             self.update_auto_suggestion();
         }
     }
@@ -514,10 +816,6 @@ impl Screen {
     pub fn remove_user_input(&mut self) {
         if !self.current_command.is_empty() {
             self.current_command.pop();
-            eprintln!(
-                "[SCREEN] remove_user_input -> current_command: '{}'",
-                self.current_command
-            );
             self.update_auto_suggestion();
         }
     }
@@ -530,10 +828,6 @@ impl Screen {
         }
 
         if !self.current_command.is_empty() {
-            eprintln!(
-                "[SCREEN] Guardando comando en historial: '{}'",
-                self.current_command
-            );
             self.command_history
                 .add_command(self.current_command.clone());
             self.current_command.clear();
@@ -542,15 +836,11 @@ impl Screen {
         self.active_suggestion = None;
     }
 
-    /// Maneja el backspace eliminando el último carácter del comando actual
-    pub fn handle_backspace(&mut self) {
-        // Este método ahora está vacío, la lógica está en remove_user_input
-    }
-
     /// Mueve el cursor a una posición específica
     pub fn move_cursor_to(&mut self, row: usize, col: usize) {
         self.cursor.row = row.min(self.rows.saturating_sub(1));
         self.cursor.col = col.min(self.cols.saturating_sub(1));
+        self.mark_dirty();
     }
 
     /// Inicia una selección en la posición especificada

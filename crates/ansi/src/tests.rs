@@ -147,4 +147,190 @@ mod tests {
         // Ahora debemos estar en la línea 0
         assert_eq!(screen.cursor.row, 0);
     }
+
+    #[test]
+    fn test_carriage_return_overwrite_preserves_rest() {
+        // Las barras de progreso dependen de que \r NO borre la línea
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"[####    ] 50%\r[#####", &mut screen);
+
+        let grid = screen.get_visible();
+        assert_eq!(grid[0][5].character, '#'); // Sobrescrito
+        assert_eq!(grid[0][11].character, '5'); // "50%" sigue visible
+    }
+
+    #[test]
+    fn test_erase_to_end_of_display() {
+        let mut screen = Screen::new(4, 10);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"AAAA\r\nBBBB\r\nCCCC", &mut screen);
+        parser.process(b"\x1b[2;2H\x1b[0J", &mut screen); // cursor a (2,2), ED 0
+
+        let grid = screen.get_visible();
+        assert_eq!(grid[0][0].character, 'A'); // Primera línea intacta
+        assert_eq!(grid[1][0].character, 'B'); // Antes del cursor intacto
+        assert_eq!(grid[1][1].character, ' '); // Desde el cursor, borrado
+        assert_eq!(grid[2][0].character, ' '); // Líneas siguientes borradas
+    }
+
+    #[test]
+    fn test_erase_line_left() {
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"Hello World\x1b[1;6H\x1b[1K", &mut screen); // EL 1 en col 6
+
+        let grid = screen.get_visible();
+        assert_eq!(grid[0][0].character, ' ');
+        assert_eq!(grid[0][5].character, ' '); // Incluye el cursor
+        assert_eq!(grid[0][6].character, 'W'); // Resto intacto
+    }
+
+    #[test]
+    fn test_scroll_region() {
+        let mut screen = Screen::new(5, 10);
+        let mut parser = AnsiParser::new();
+
+        // Región de scroll: filas 2-4 (1-indexed). Llenar y forzar scroll.
+        parser.process(b"TOP\x1b[2;4r", &mut screen);
+        parser.process(b"\x1b[4;1HX\x1b[4;1H\nY", &mut screen);
+
+        let grid = screen.get_visible();
+        assert_eq!(grid[0][0].character, 'T'); // Fuera de la región, intacto
+        assert_eq!(grid[2][0].character, 'X'); // X subió una fila dentro de la región
+        assert_eq!(grid[3][0].character, 'Y');
+    }
+
+    #[test]
+    fn test_alt_screen() {
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"main content", &mut screen);
+        parser.process(b"\x1b[?1049h", &mut screen); // Entrar a alt screen
+        assert!(screen.is_alt_screen());
+        assert_eq!(screen.get_visible()[0][0].character, ' '); // Alt screen vacía
+
+        parser.process(b"vim!", &mut screen);
+        parser.process(b"\x1b[?1049l", &mut screen); // Salir
+
+        assert!(!screen.is_alt_screen());
+        assert_eq!(screen.get_visible()[0][0].character, 'm'); // Contenido restaurado
+    }
+
+    #[test]
+    fn test_insert_delete_lines() {
+        let mut screen = Screen::new(4, 10);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"AA\r\nBB\r\nCC", &mut screen);
+        parser.process(b"\x1b[2;1H\x1b[1L", &mut screen); // Insertar línea en fila 2
+
+        let grid = screen.get_visible();
+        assert_eq!(grid[0][0].character, 'A');
+        assert_eq!(grid[1][0].character, ' '); // Línea insertada
+        assert_eq!(grid[2][0].character, 'B'); // BB bajó
+
+        parser.process(b"\x1b[1M", &mut screen); // Borrar la línea insertada
+        let grid = screen.get_visible();
+        assert_eq!(grid[1][0].character, 'B'); // BB volvió a subir
+    }
+
+    #[test]
+    fn test_insert_delete_chars() {
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"ABCDEF\x1b[1;3H\x1b[2@", &mut screen); // ICH 2 en col 3
+
+        let grid = screen.get_visible();
+        assert_eq!(grid[0][1].character, 'B');
+        assert_eq!(grid[0][2].character, ' ');
+        assert_eq!(grid[0][3].character, ' ');
+        assert_eq!(grid[0][4].character, 'C'); // Desplazado a la derecha
+
+        parser.process(b"\x1b[2P", &mut screen); // DCH 2: deshace la inserción
+        let grid = screen.get_visible();
+        assert_eq!(grid[0][2].character, 'C');
+    }
+
+    #[test]
+    fn test_cursor_visibility() {
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"\x1b[?25l", &mut screen);
+        assert!(!screen.cursor.visible);
+        parser.process(b"\x1b[?25h", &mut screen);
+        assert!(screen.cursor.visible);
+    }
+
+    #[test]
+    fn test_bracketed_paste_mode() {
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        assert!(!screen.bracketed_paste);
+        parser.process(b"\x1b[?2004h", &mut screen);
+        assert!(screen.bracketed_paste);
+        parser.process(b"\x1b[?2004l", &mut screen);
+        assert!(!screen.bracketed_paste);
+    }
+
+    #[test]
+    fn test_device_status_report() {
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        // CPR: pedir posición del cursor tras moverlo a (5,10)
+        let responses = parser.process(b"\x1b[5;10H\x1b[6n", &mut screen);
+        assert_eq!(responses, b"\x1b[5;10R");
+    }
+
+    #[test]
+    fn test_save_restore_cursor() {
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"\x1b[5;10H\x1b7\x1b[1;1H\x1b8", &mut screen);
+        assert_eq!(screen.cursor.row, 4);
+        assert_eq!(screen.cursor.col, 9);
+    }
+
+    #[test]
+    fn test_window_title() {
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"\x1b]2;Mi Titulo\x07", &mut screen);
+        assert_eq!(screen.take_title().as_deref(), Some("Mi Titulo"));
+        assert_eq!(screen.take_title(), None); // Consumido
+    }
+
+    #[test]
+    fn test_sgr_attrs_persist_across_lines() {
+        // Los atributos NO deben resetearse en \r\n (antes había un hack que lo hacía)
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"\x1b[31mrojo\r\ntodavia rojo", &mut screen);
+
+        let grid = screen.get_visible();
+        assert_eq!(grid[1][0].attrs.fg_color, Color::Indexed(1));
+    }
+
+    #[test]
+    fn test_reverse_index_scrolls_down() {
+        let mut screen = Screen::new(3, 10);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"AA\x1b[1;1H\x1bM", &mut screen); // RI en la primera fila
+
+        let grid = screen.get_visible();
+        assert_eq!(grid[0][0].character, ' '); // Línea nueva arriba
+        assert_eq!(grid[1][0].character, 'A'); // AA bajó
+    }
 }

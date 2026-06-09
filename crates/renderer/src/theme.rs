@@ -86,9 +86,27 @@ impl ModernTheme {
     }
 
     pub fn get_ansi_color(&self, index: u8) -> u32 {
-        let idx = (index as usize).min(15);
-        let (r, g, b) = self.ansi_colors[idx];
-        Self::rgb_to_u32(r, g, b)
+        match index {
+            // 0-15: paleta del tema
+            0..=15 => {
+                let (r, g, b) = self.ansi_colors[index as usize];
+                Self::rgb_to_u32(r, g, b)
+            }
+            // 16-231: cubo de color 6x6x6 (estándar xterm)
+            16..=231 => {
+                let idx = index - 16;
+                let to_channel = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+                let r = to_channel(idx / 36);
+                let g = to_channel((idx % 36) / 6);
+                let b = to_channel(idx % 6);
+                Self::rgb_to_u32(r, g, b)
+            }
+            // 232-255: rampa de grises
+            _ => {
+                let gray = 8 + (index - 232) * 10;
+                Self::rgb_to_u32(gray, gray, gray)
+            }
+        }
     }
 
     pub fn accent_blue_u32(&self) -> u32 {

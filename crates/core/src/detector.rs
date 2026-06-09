@@ -280,13 +280,13 @@ impl ContentDetector {
                             token_type: JsonTokenType::Comma,
                         });
                     }
-                    't' | 'f' => {
+                    't' | 'f'
                         // true o false
-                        if i + 4 <= chars.len()
+                        if (i + 4 <= chars.len()
                             && &chars[i..i + 4].iter().collect::<String>() == "true"
                             || i + 5 <= chars.len()
-                                && &chars[i..i + 5].iter().collect::<String>() == "false"
-                        {
+                                && &chars[i..i + 5].iter().collect::<String>() == "false")
+                        => {
                             let len = if chars[i + 1] == 'r' { 4 } else { 5 };
                             fragments.push(JsonFragment {
                                 start_col: i,
@@ -296,12 +296,11 @@ impl ContentDetector {
                             });
                             i += len - 1;
                         }
-                    }
-                    'n' => {
+                    'n'
                         // null
                         if i + 4 <= chars.len()
                             && &chars[i..i + 4].iter().collect::<String>() == "null"
-                        {
+                        => {
                             fragments.push(JsonFragment {
                                 start_col: i,
                                 end_col: i + 4,
@@ -310,7 +309,6 @@ impl ContentDetector {
                             });
                             i += 3;
                         }
-                    }
                     '0'..='9' | '-' => {
                         // Número
                         let start = i;
