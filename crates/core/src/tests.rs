@@ -108,9 +108,8 @@ mod tests {
             fg_color: Color::Indexed(1),
             bg_color: Color::Indexed(0),
             bold: true,
-            italic: false,
             underline: true,
-            reverse: false,
+            ..CellAttributes::default()
         };
 
         let cell = Cell::with_attrs('A', attrs);

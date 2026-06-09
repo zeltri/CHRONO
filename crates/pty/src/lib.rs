@@ -214,11 +214,16 @@ impl Pty {
         .join(":")
     }
 
-    /// Crea un nuevo PTY y ejecuta el shell por defecto.
+    /// Crea un nuevo PTY y ejecuta el shell por defecto ($SHELL)
+    pub fn spawn_default_shell(rows: u16, cols: u16) -> Result<Self> {
+        Self::spawn_shell(None, rows, cols)
+    }
+
+    /// Crea un nuevo PTY y ejecuta el shell indicado (o $SHELL si es None).
     ///
     /// La configuración de colores (LS_COLORS) se pasa por variables de
     /// entorno al proceso hijo: nunca se modifican los dotfiles del usuario.
-    pub fn spawn_default_shell(rows: u16, cols: u16) -> Result<Self> {
+    pub fn spawn_shell(program: Option<&str>, rows: u16, cols: u16) -> Result<Self> {
         let pty_system = native_pty_system();
 
         let pty_size = PtySize {
@@ -230,13 +235,15 @@ impl Pty {
 
         let pair = pty_system.openpty(pty_size).context("Failed to open PTY")?;
 
-        // Obtener el shell por defecto
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| {
-            if cfg!(windows) {
-                "cmd.exe".to_string()
-            } else {
-                "/bin/bash".to_string()
-            }
+        // Shell configurado, o el por defecto del usuario
+        let shell = program.map(str::to_string).unwrap_or_else(|| {
+            std::env::var("SHELL").unwrap_or_else(|_| {
+                if cfg!(windows) {
+                    "cmd.exe".to_string()
+                } else {
+                    "/bin/bash".to_string()
+                }
+            })
         });
 
         log::info!("Spawning shell: {}", shell);
@@ -275,6 +282,11 @@ impl Pty {
     /// Obtiene un handle clonable para escribir al PTY desde otros hilos
     pub fn writer(&self) -> PtyWriter {
         self.writer.clone()
+    }
+
+    /// Termina el proceso hijo (al cerrar una tab)
+    pub fn kill(&mut self) {
+        let _ = self._child.kill();
     }
 
     /// Lee datos del PTY (no bloqueante)

@@ -1,11 +1,18 @@
 use crate::ModernTheme;
-use fontdue::{Font, FontSettings};
+use fontdue::{Font, FontSettings, Metrics};
+use std::collections::HashMap;
 use terminal_core::{
     extract_file_references, parse_file_entry, ContentDetector, ContentType, JsonTokenType,
     LineContext, LogLevel, Screen,
 };
 
-/// Renderer CPU moderno con tema oscuro innovador y detección inteligente de contenido
+/// Glifo rasterizado y cacheado
+struct CachedGlyph {
+    metrics: Metrics,
+    bitmap: Vec<u8>,
+}
+
+/// Renderer CPU moderno con tema oscuro, cache de glifos y detección inteligente de contenido
 pub struct CpuRenderer {
     /// Ancho de la ventana en píxeles
     width: u32,
@@ -19,11 +26,15 @@ pub struct CpuRenderer {
     char_height: u32,
     /// Baseline desde la parte superior de la celda
     baseline: i32,
-    /// Fuente cargada
-    font: Font,
-    /// Archivo sobre el que está el cursor (para enlaces)
+    /// Fuente principal + fuentes de fallback del sistema (CJK, símbolos)
+    fonts: Vec<Font>,
+    /// Cache de glifos rasterizados (evita rasterizar por celda en cada frame)
+    glyph_cache: HashMap<char, CachedGlyph>,
+    /// Archivo sobre el que está el cursor (para enlaces de stack trace)
     pub hovered_file: Option<(usize, String, Option<usize>)>,
-    /// Tema de colores moderno (Tokyo Night inspired)
+    /// Hyperlink OSC 8 sobre el que está el cursor
+    pub hovered_link: Option<String>,
+    /// Tema de colores moderno
     theme: ModernTheme,
     /// Frame counter para animaciones sutiles
     frame_count: u32,
@@ -31,25 +42,49 @@ pub struct CpuRenderer {
     content_detector: ContentDetector,
 }
 
-impl CpuRenderer {
-    pub fn new(width: u32, height: u32) -> Self {
-        let font_size = 16.0;
+/// Rutas candidatas de fuentes de fallback (CJK, símbolos, emoji monocromo)
+const FALLBACK_FONT_PATHS: &[&str] = &[
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansMonoCJKjp-Regular.otf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+    "/usr/share/fonts/noto/NotoSansSymbols-Regular.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/Apple Symbols.ttf",
+];
 
-        // Cargar Cascadia Code
+impl CpuRenderer {
+    pub fn new(width: u32, height: u32, font_size: f32) -> Self {
+        let font_size = if font_size > 4.0 { font_size } else { 16.0 };
+
+        // Fuente principal: Cascadia Code embebida
         let font_data = Self::load_system_font();
         let font =
             Font::from_bytes(font_data, FontSettings::default()).expect("Failed to load font");
 
-        // Obtener métricas de línea
-        let line_metrics = font.horizontal_line_metrics(font_size).unwrap();
+        // Fuentes de fallback del sistema (CJK, símbolos)
+        let mut fonts = vec![font];
+        for path in FALLBACK_FONT_PATHS {
+            if fonts.len() >= 4 {
+                break;
+            }
+            if let Ok(data) = std::fs::read(path) {
+                if let Ok(fallback) = Font::from_bytes(data, FontSettings::default()) {
+                    log::info!("Fuente de fallback cargada: {}", path);
+                    fonts.push(fallback);
+                }
+            }
+        }
 
-        // Calcular dimensiones de celda
+        // Métricas desde la fuente principal
+        let line_metrics = fonts[0].horizontal_line_metrics(font_size).unwrap();
         let char_height =
             (line_metrics.ascent - line_metrics.descent + line_metrics.line_gap).ceil() as u32;
         let baseline = line_metrics.ascent.ceil() as i32;
-
-        // Usar el advance width de 'M' como ancho estándar
-        let metrics = font.metrics('M', font_size);
+        let metrics = fonts[0].metrics('M', font_size);
         let char_width = metrics.advance_width.ceil() as u32;
 
         Self {
@@ -59,8 +94,10 @@ impl CpuRenderer {
             char_width,
             char_height,
             baseline,
-            font,
+            fonts,
+            glyph_cache: HashMap::new(),
             hovered_file: None,
+            hovered_link: None,
             theme: ModernTheme::default(),
             frame_count: 0,
             content_detector: ContentDetector::new(),
@@ -71,89 +108,99 @@ impl CpuRenderer {
         include_bytes!("../../../fonts/CascadiaCode.ttf")
     }
 
-    /// Calcula el número de filas y columnas que caben en la ventana
+    /// Altura de la barra de tabs en píxeles
+    pub fn tab_bar_height(&self) -> u32 {
+        self.char_height + 8
+    }
+
+    /// Calcula el número de filas y columnas que caben en la ventana (bajo la tab bar)
     pub fn calculate_grid_size(&self) -> (usize, usize) {
+        let usable_height = self.height.saturating_sub(self.tab_bar_height());
         let cols = (self.width / self.char_width) as usize;
-        let rows = (self.height / self.char_height) as usize;
+        let rows = (usable_height / self.char_height) as usize;
         (rows.max(1), cols.max(1))
     }
 
-    pub fn render(&mut self, screen: &mut Screen, buffer: &mut [u32]) {
+    /// Renderiza la pantalla activa y la barra de tabs
+    pub fn render(
+        &mut self,
+        screen: &mut Screen,
+        buffer: &mut [u32],
+        tab_titles: &[String],
+        active_tab: usize,
+    ) {
         self.frame_count = self.frame_count.wrapping_add(1);
 
-        // Limpiar buffer con fondo moderno
         let bg_color = self.theme.bg_primary_u32();
         buffer.fill(bg_color);
 
-        // OPTIMIZACIÓN: Primero detectar y cachear todos los content types
-        // para evitar conflictos de borrowing
+        self.render_tab_bar(buffer, tab_titles, active_tab);
+
+        // Pre-pasada: detectar y cachear content types de las líneas visibles
         for row_idx in 0..screen.rows {
             if screen.content_type_cache[row_idx].is_none() {
-                let line_text: String = screen.grid[row_idx].iter().map(|c| c.character).collect();
+                let line_text: String = screen
+                    .display_line(row_idx)
+                    .iter()
+                    .map(|c| c.character)
+                    .collect();
                 let detected = self.content_detector.detect_line(&line_text);
                 screen.content_type_cache[row_idx] = Some(detected);
             }
         }
 
-        let grid = screen.get_visible();
+        let screen = &*screen;
+        let y_offset = self.tab_bar_height();
 
-        for (row_idx, row) in grid.iter().enumerate() {
-            // Obtener texto de la línea para detección
-            let line_text: String = row.iter().map(|c| c.character).collect();
-
-            // Obtener contexto de la línea (del sistema existente)
+        for row_idx in 0..screen.rows {
+            let line = screen.display_line(row_idx);
+            if line.is_empty() {
+                continue;
+            }
+            let line_text: String = line.iter().map(|c| c.character).collect();
             let line_context = screen.get_line_context(row_idx);
-
-            // OPTIMIZACIÓN: Obtener del cache (ya está poblado arriba)
             let content_type = screen.content_type_cache[row_idx].unwrap_or(ContentType::Normal);
 
-            // Extraer referencias a archivos si es stack trace
             let file_refs = if line_context == LineContext::StackTrace {
                 extract_file_references(&line_text)
             } else {
                 Vec::new()
             };
 
-            // Parsear entrada de archivo si es un listado
             let file_entry = if line_context == LineContext::FileList {
                 parse_file_entry(&line_text)
             } else {
                 None
             };
 
-            // Parsear fragmentos JSON si es JSON
             let json_fragments = if content_type == ContentType::Json {
                 self.content_detector.parse_json_fragments(&line_text)
             } else {
                 Vec::new()
             };
 
-            for (col_idx, cell) in row.iter().enumerate() {
+            for (col_idx, cell) in line.iter().enumerate() {
                 let x = col_idx as u32 * self.char_width;
-                let y = row_idx as u32 * self.char_height;
+                let y = row_idx as u32 * self.char_height + y_offset;
 
-                // Determinar si esta celda es parte de un enlace
                 let is_link = !file_refs.is_empty()
                     && file_refs
                         .iter()
                         .any(|f| col_idx >= f.start_col && col_idx < f.end_col);
+                let is_hyperlink = cell.hyperlink.is_some();
 
-                // Determinar si esta celda es parte de un archivo listado
-                let is_file_entry = file_entry.as_ref().is_some_and(|entry| {
-                    col_idx >= entry.start_col && col_idx < entry.end_col
-                });
+                let is_file_entry = file_entry
+                    .as_ref()
+                    .is_some_and(|entry| col_idx >= entry.start_col && col_idx < entry.end_col);
 
-                // Determinar si es parte de un fragmento JSON
                 let json_fragment = json_fragments
                     .iter()
                     .find(|f| col_idx >= f.start_col && col_idx < f.end_col);
 
-                // Verificar si esta celda está seleccionada
                 let is_selected = screen.is_selected(row_idx, col_idx);
 
-                // Renderizar fondo de celda (con soporte de video inverso, SGR 7)
+                // Fondo de celda (con soporte de video inverso, SGR 7)
                 let bg = if is_selected {
-                    // Color de fondo para selección (azul oscuro semi-transparente)
                     self.theme.selection_bg_u32()
                 } else if cell.attrs.reverse {
                     self.color_to_u32(cell.attrs.fg_color)
@@ -162,30 +209,45 @@ impl CpuRenderer {
                 };
                 self.fill_rect(buffer, x, y, self.char_width, self.char_height, bg);
 
-                // Renderizar el carácter con color contextual
-                if cell.character != ' ' {
-                    let fg = if cell.attrs.reverse {
-                        self.bg_color_to_u32(cell.attrs.bg_color)
-                    } else if cell.is_suggestion {
-                        // Sugerencias de autocompletado en gris claro
-                        self.theme.fg_suggestion_u32()
-                    } else if is_link {
-                        self.theme.accent_blue_u32() // Enlaces en azul moderno
-                    } else if is_file_entry {
-                        // Colorear según tipo de archivo
-                        self.get_file_color(file_entry.as_ref().unwrap())
-                    } else if let Some(fragment) = json_fragment {
-                        // Colorear según token JSON
-                        self.get_json_color(fragment.token_type)
-                    } else {
-                        // Usar nuevo sistema de detección de contenido
-                        self.get_content_color(cell, line_context, content_type)
-                    };
-                    self.render_char(buffer, cell.character, x, y, fg);
+                // Color del carácter
+                let mut fg = if cell.attrs.reverse {
+                    self.bg_color_to_u32(cell.attrs.bg_color)
+                } else if cell.is_suggestion {
+                    self.theme.fg_suggestion_u32()
+                } else if is_link || is_hyperlink {
+                    self.theme.accent_blue_u32()
+                } else if is_file_entry {
+                    self.get_file_color(file_entry.as_ref().unwrap())
+                } else if let Some(fragment) = json_fragment {
+                    self.get_json_color(fragment.token_type)
+                } else {
+                    self.get_content_color(cell, line_context, content_type)
+                };
+
+                if cell.attrs.dim {
+                    fg = self.apply_opacity(fg, 0.55);
                 }
 
-                // Subrayar enlaces con efecto moderno
-                if is_link {
+                if cell.character != ' ' {
+                    self.render_char(
+                        buffer,
+                        cell.character,
+                        x,
+                        y,
+                        fg,
+                        cell.attrs.bold,
+                        cell.attrs.italic,
+                    );
+                }
+
+                // Decoraciones
+                if cell.attrs.underline {
+                    self.draw_hline(buffer, x, y + self.char_height - 2, self.char_width, fg);
+                }
+                if cell.attrs.strikethrough {
+                    self.draw_hline(buffer, x, y + self.char_height / 2, self.char_width, fg);
+                }
+                if is_link || is_hyperlink {
                     let link_color = self.theme.accent_blue_u32();
                     self.draw_underline(
                         buffer,
@@ -199,19 +261,22 @@ impl CpuRenderer {
             }
         }
 
-        // Renderizar cursor animado con pulse
-        if screen.cursor.visible {
-            let cursor_x = screen.cursor.col as u32 * self.char_width;
-            let cursor_y = screen.cursor.row as u32 * self.char_height;
+        // Indicador de scrollback cuando la vista no está en vivo
+        if screen.view_offset() > 0 {
+            self.render_scroll_indicator(buffer, screen.view_offset(), y_offset);
+        }
 
-            // Animación de pulse sutil
-            let pulse = ((self.frame_count as f32 * 0.05).sin() + 1.0) * 0.5; // 0.0 - 1.0
-            let opacity = 0.7 + pulse * 0.3; // 0.7 - 1.0
+        // Cursor (solo en vivo, no mientras se navega el scrollback)
+        if screen.cursor.visible && screen.view_offset() == 0 {
+            let cursor_x = screen.cursor.col as u32 * self.char_width;
+            let cursor_y = screen.cursor.row as u32 * self.char_height + y_offset;
+
+            let pulse = ((self.frame_count as f32 * 0.05).sin() + 1.0) * 0.5;
+            let opacity = 0.7 + pulse * 0.3;
 
             let cursor_color = self.theme.fg_primary_u32();
             let final_color = self.apply_opacity(cursor_color, opacity);
 
-            // Cursor más grueso y moderno (3px)
             self.fill_rect(
                 buffer,
                 cursor_x,
@@ -220,6 +285,91 @@ impl CpuRenderer {
                 3,
                 final_color,
             );
+        }
+    }
+
+    /// Dibuja la barra de tabs en la parte superior
+    fn render_tab_bar(&mut self, buffer: &mut [u32], titles: &[String], active: usize) {
+        let bar_h = self.tab_bar_height();
+        let bar_bg = ModernTheme::rgb_to_u32(33, 37, 43); // bg_secondary
+        self.fill_rect(buffer, 0, 0, self.width, bar_h, bar_bg);
+
+        let tab_w = self.tab_width();
+        for (i, title) in titles.iter().enumerate() {
+            let x0 = i as u32 * tab_w;
+            if x0 >= self.width {
+                break;
+            }
+            let is_active = i == active;
+            let tab_bg = if is_active {
+                self.theme.bg_primary_u32()
+            } else {
+                bar_bg
+            };
+            let fg = if is_active {
+                self.theme.fg_primary_u32()
+            } else {
+                ModernTheme::rgb_to_u32(92, 99, 112) // fg_muted
+            };
+
+            self.fill_rect(buffer, x0, 0, tab_w.saturating_sub(1), bar_h, tab_bg);
+
+            // Acento superior en la tab activa
+            if is_active {
+                let accent = self.theme.accent_blue_u32();
+                self.fill_rect(buffer, x0, 0, tab_w.saturating_sub(1), 2, accent);
+            }
+
+            // Título truncado al ancho de la tab
+            let max_chars = ((tab_w / self.char_width) as usize).saturating_sub(2);
+            let label: String = format!("{} {}", i + 1, title)
+                .chars()
+                .take(max_chars)
+                .collect();
+            let text_y = 4u32;
+            for (ci, ch) in label.chars().enumerate() {
+                let cx = x0 + self.char_width / 2 + ci as u32 * self.char_width;
+                if cx + self.char_width > x0 + tab_w {
+                    break;
+                }
+                self.render_char(buffer, ch, cx, text_y, fg, is_active, false);
+            }
+        }
+    }
+
+    /// Ancho en píxeles de cada tab
+    fn tab_width(&self) -> u32 {
+        (self.char_width * 22).min(self.width.max(1))
+    }
+
+    /// Devuelve el índice de tab bajo un punto, si el punto está en la barra
+    pub fn tab_hit(&self, x: f64, y: f64, n_tabs: usize) -> Option<usize> {
+        if y < 0.0 || y >= self.tab_bar_height() as f64 || x < 0.0 {
+            return None;
+        }
+        let idx = (x as u32 / self.tab_width()) as usize;
+        if idx < n_tabs {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
+    /// Pequeño indicador "↑ N" cuando se navega el scrollback
+    fn render_scroll_indicator(&mut self, buffer: &mut [u32], offset: usize, y_offset: u32) {
+        let label = format!(" {} ", offset);
+        let w = (label.chars().count() as u32 + 1) * self.char_width;
+        let x0 = self.width.saturating_sub(w + 4);
+        let y0 = y_offset + 4;
+        let bg = ModernTheme::rgb_to_u32(57, 63, 74);
+        let fg = self.theme.accent_yellow_u32();
+        self.fill_rect(buffer, x0, y0, w, self.char_height, bg);
+        let mut x = x0;
+        self.render_char(buffer, '↑', x, y0, fg, false, false);
+        x += self.char_width;
+        for ch in label.chars() {
+            self.render_char(buffer, ch, x, y0, fg, false, false);
+            x += self.char_width;
         }
     }
 
@@ -242,6 +392,23 @@ impl CpuRenderer {
         }
     }
 
+    /// Línea horizontal de 1px (underline / strikethrough)
+    fn draw_hline(&self, buffer: &mut [u32], x: u32, y: u32, w: u32, color: u32) {
+        if y >= self.height {
+            return;
+        }
+        for dx in 0..w {
+            let px = x + dx;
+            if px >= self.width {
+                break;
+            }
+            let idx = (y * self.width + px) as usize;
+            if idx < buffer.len() {
+                buffer[idx] = color;
+            }
+        }
+    }
+
     fn color_to_u32(&self, color: terminal_core::Color) -> u32 {
         match color {
             terminal_core::Color::Indexed(idx) => self.theme.get_ansi_color(idx),
@@ -258,16 +425,68 @@ impl CpuRenderer {
         }
     }
 
-    fn render_char(&self, buffer: &mut [u32], ch: char, x: u32, y: u32, color: u32) {
-        let (metrics, bitmap) = self.font.rasterize(ch, self.font_size);
+    /// Obtiene (o rasteriza y cachea) el glifo de un carácter, con fallback de fuentes
+    fn glyph(&mut self, ch: char) -> &CachedGlyph {
+        let font_size = self.font_size;
+        let fonts = &self.fonts;
+        self.glyph_cache.entry(ch).or_insert_with(|| {
+            // Buscar la primera fuente que tenga el glifo; si ninguna, usar la principal
+            let font = fonts
+                .iter()
+                .find(|f| f.lookup_glyph_index(ch) != 0)
+                .unwrap_or(&fonts[0]);
+            let (metrics, bitmap) = font.rasterize(ch, font_size);
+            CachedGlyph { metrics, bitmap }
+        })
+    }
 
-        // Usar baseline consistente
+    /// Renderiza un carácter con estilos sintetizados (bold = doble pase, italic = shear)
+    #[allow(clippy::too_many_arguments)]
+    fn render_char(
+        &mut self,
+        buffer: &mut [u32],
+        ch: char,
+        x: u32,
+        y: u32,
+        color: u32,
+        bold: bool,
+        italic: bool,
+    ) {
+        let (metrics, bitmap) = {
+            let g = self.glyph(ch);
+            (g.metrics, g.bitmap.clone())
+        };
+
+        self.blit_glyph(buffer, &metrics, &bitmap, x, y, color, italic);
+        if bold {
+            // Bold sintetizado: segundo pase desplazado 1px
+            self.blit_glyph(buffer, &metrics, &bitmap, x + 1, y, color, italic);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn blit_glyph(
+        &self,
+        buffer: &mut [u32],
+        metrics: &Metrics,
+        bitmap: &[u8],
+        x: u32,
+        y: u32,
+        color: u32,
+        italic: bool,
+    ) {
         let glyph_x = x as i32 + metrics.xmin;
         let glyph_y = y as i32 + self.baseline - metrics.height as i32 - metrics.ymin;
 
         for gy in 0..metrics.height {
+            // Italic sintetizado: shear horizontal proporcional a la altura
+            let shear = if italic {
+                ((metrics.height.saturating_sub(gy)) as f32 * 0.25) as i32
+            } else {
+                0
+            };
             for gx in 0..metrics.width {
-                let px = glyph_x + gx as i32;
+                let px = glyph_x + gx as i32 + shear;
                 let py = glyph_y + gy as i32;
 
                 if px >= 0 && py >= 0 && (px as u32) < self.width && (py as u32) < self.height {
@@ -275,7 +494,6 @@ impl CpuRenderer {
                     if alpha > 0 {
                         let idx = (py as u32 * self.width + px as u32) as usize;
                         if idx < buffer.len() {
-                            // Blend alpha
                             let alpha_f = alpha as f32 / 255.0;
                             let bg = buffer[idx];
                             let bg_r = ((bg >> 16) & 0xFF) as f32;
@@ -309,7 +527,7 @@ impl CpuRenderer {
             LineContext::Error => self.theme.accent_red_u32(),
             LineContext::Warning => self.theme.accent_yellow_u32(),
             LineContext::StackTrace => self.theme.accent_cyan_u32(),
-            LineContext::FileList => self.theme.fg_primary_u32(), // Default, se sobrescribe por get_file_color
+            LineContext::FileList => self.theme.fg_primary_u32(),
             LineContext::Normal => self.color_to_u32(cell.attrs.fg_color),
         }
     }
@@ -384,8 +602,10 @@ impl CpuRenderer {
     /// Dibuja subrayado moderno con glow sutil
     fn draw_underline(&self, buffer: &mut [u32], x: u32, y: u32, w: u32, h: u32, color: u32) {
         let underline_y = (y + h - 2) as usize;
+        if underline_y >= self.height as usize {
+            return;
+        }
 
-        // Línea principal
         for dx in 0..w as usize {
             let px = x as usize + dx;
             let idx = underline_y * self.width as usize + px;
@@ -393,7 +613,6 @@ impl CpuRenderer {
                 buffer[idx] = color;
             }
 
-            // Glow sutil arriba (efecto moderno)
             if underline_y > 0 {
                 let glow_idx = (underline_y - 1) * self.width as usize + px;
                 if glow_idx < buffer.len() && px < self.width as usize {
@@ -429,17 +648,27 @@ impl CpuRenderer {
         0xFF000000 | (final_r << 16) | (final_g << 8) | final_b
     }
 
-    /// Detecta si el cursor está sobre un enlace de archivo
+    /// Detecta si el cursor está sobre un enlace (stack trace u OSC 8)
     pub fn check_file_hover(&mut self, screen: &Screen, mouse_x: f64, mouse_y: f64) {
-        let col = (mouse_x / self.char_width as f64) as usize;
-        let row = (mouse_y / self.char_height as f64) as usize;
+        self.hovered_file = None;
+        self.hovered_link = None;
 
+        let (row, col) = self.screen_to_grid(mouse_x, mouse_y);
         if row >= screen.rows {
-            self.hovered_file = None;
             return;
         }
 
-        let line_text: String = screen.grid[row].iter().map(|c| c.character).collect();
+        // Hyperlinks OSC 8 tienen prioridad
+        if let Some(uri) = screen.display_hyperlink_at(row, col) {
+            self.hovered_link = Some(uri.to_string());
+            return;
+        }
+
+        let line_text: String = screen
+            .display_line(row)
+            .iter()
+            .map(|c| c.character)
+            .collect();
         let file_refs = extract_file_references(&line_text);
 
         for file_ref in file_refs {
@@ -448,14 +677,13 @@ impl CpuRenderer {
                 return;
             }
         }
-
-        self.hovered_file = None;
     }
 
     /// Convierte coordenadas de pantalla a posición de grid (fila, columna)
     pub fn screen_to_grid(&self, mouse_x: f64, mouse_y: f64) -> (usize, usize) {
         let col = (mouse_x / self.char_width as f64) as usize;
-        let row = (mouse_y / self.char_height as f64) as usize;
+        let y = (mouse_y - self.tab_bar_height() as f64).max(0.0);
+        let row = (y / self.char_height as f64) as usize;
         (row, col)
     }
 }

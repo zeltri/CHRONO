@@ -34,7 +34,9 @@ impl CommandHistory {
 
         log::trace!(
             "[HISTORIAL] Shell detectado: {} (zsh={}, bash={})",
-            shell, is_zsh, is_bash
+            shell,
+            is_zsh,
+            is_bash
         );
 
         // Priorizar el shell actual del usuario

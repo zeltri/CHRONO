@@ -1,4 +1,4 @@
-use terminal_core::{CellAttributes, Color, Screen};
+use terminal_core::{CellAttributes, Color, MouseMode, Screen};
 use vte::{Params, Perform};
 
 /// Handler que implementa el trait Perform de vte para procesar secuencias ANSI
@@ -98,12 +98,28 @@ impl<'a> Perform for AnsiHandler<'a> {
                         }
                     }
                 }
+                "8" => {
+                    // OSC 8: hyperlink. Formato: 8;params;URI (URI vacía = fin del enlace)
+                    let uri = params
+                        .get(2)
+                        .and_then(|p| std::str::from_utf8(p).ok())
+                        .unwrap_or("");
+                    self.screen.set_hyperlink(if uri.is_empty() {
+                        None
+                    } else {
+                        Some(uri.to_string())
+                    });
+                }
                 "9" => {
                     log::trace!("Progress notification received");
                 }
                 "133" => {
-                    // Shell integration sequences (VSCode, iTerm2)
-                    log::trace!("Shell integration sequence received");
+                    // Shell integration (VSCode, iTerm2): A = inicio de prompt
+                    if let Some(kind) = params.get(1).and_then(|p| p.first()) {
+                        if *kind == b'A' {
+                            self.screen.mark_prompt();
+                        }
+                    }
                 }
                 _ => {
                     log::trace!("OSC command not implemented: {}", command);
@@ -271,7 +287,11 @@ impl<'a> Perform for AnsiHandler<'a> {
     fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
         if !intermediates.is_empty() {
             // Secuencias de charset (ESC ( B, etc.) - ignoradas
-            log::trace!("ESC con intermedios no implementado: {:?} {}", intermediates, byte);
+            log::trace!(
+                "ESC con intermedios no implementado: {:?} {}",
+                intermediates,
+                byte
+            );
             return;
         }
         match byte {
@@ -291,7 +311,7 @@ impl<'a> Perform for AnsiHandler<'a> {
 impl<'a> AnsiHandler<'a> {
     fn handle_private_mode(&mut self, mode: u16, enable: bool) {
         match mode {
-            7 => self.screen.autowrap = enable, // DECAWM
+            7 => self.screen.autowrap = enable,           // DECAWM
             25 => self.screen.set_cursor_visible(enable), // DECTCEM
             47 | 1047 => {
                 // Pantalla alternativa (sin guardar cursor)
@@ -323,9 +343,37 @@ impl<'a> AnsiHandler<'a> {
             12 => {
                 // Cursor blinking - ignorado (el renderer ya anima el cursor)
             }
-            1000..=1006 | 1015 => {
-                // Mouse tracking - aún no soportado
-                log::trace!("Mouse tracking mode {} no soportado", mode);
+            9 => {
+                self.screen.mouse_mode = if enable {
+                    MouseMode::X10
+                } else {
+                    MouseMode::None
+                };
+            }
+            1000 => {
+                self.screen.mouse_mode = if enable {
+                    MouseMode::Normal
+                } else {
+                    MouseMode::None
+                };
+            }
+            1002 => {
+                self.screen.mouse_mode = if enable {
+                    MouseMode::ButtonEvent
+                } else {
+                    MouseMode::None
+                };
+            }
+            1003 => {
+                self.screen.mouse_mode = if enable {
+                    MouseMode::AnyEvent
+                } else {
+                    MouseMode::None
+                };
+            }
+            1006 => self.screen.mouse_sgr = enable,
+            1004 | 1005 | 1015 => {
+                log::trace!("Mouse mode {} no soportado", mode);
             }
             _ => {
                 log::trace!("Modo privado no implementado: {} ({})", mode, enable);
@@ -350,13 +398,19 @@ impl<'a> AnsiHandler<'a> {
                     self.screen.current_attrs = CellAttributes::default();
                 }
                 1 => self.screen.current_attrs.bold = true,
+                2 => self.screen.current_attrs.dim = true,
                 3 => self.screen.current_attrs.italic = true,
                 4 => self.screen.current_attrs.underline = true,
                 7 => self.screen.current_attrs.reverse = true,
-                22 => self.screen.current_attrs.bold = false,
+                9 => self.screen.current_attrs.strikethrough = true,
+                22 => {
+                    self.screen.current_attrs.bold = false;
+                    self.screen.current_attrs.dim = false;
+                }
                 23 => self.screen.current_attrs.italic = false,
                 24 => self.screen.current_attrs.underline = false,
                 27 => self.screen.current_attrs.reverse = false,
+                29 => self.screen.current_attrs.strikethrough = false,
                 // Foreground colors
                 30..=37 => {
                     self.screen.current_attrs.fg_color = Color::Indexed((n - 30) as u8);

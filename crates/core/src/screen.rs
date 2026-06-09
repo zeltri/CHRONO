@@ -10,6 +10,7 @@ use crate::{
 /// Estado guardado de la pantalla principal mientras la pantalla alternativa está activa
 struct MainScreenState {
     grid: Vec<Vec<Cell>>,
+    grid_wrapped: Vec<bool>,
     cursor: Cursor,
     attrs: CellAttributes,
 }
@@ -22,6 +23,21 @@ struct SavedCursor {
     attrs: CellAttributes,
 }
 
+/// Modo de tracking de mouse solicitado por la aplicación (DECSET 9/1000/1002/1003)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MouseMode {
+    #[default]
+    None,
+    /// Modo 9: solo press
+    X10,
+    /// Modo 1000: press + release
+    Normal,
+    /// Modo 1002: press + release + drag
+    ButtonEvent,
+    /// Modo 1003: todo el movimiento
+    AnyEvent,
+}
+
 /// Buffer de pantalla de terminal
 pub struct Screen {
     /// Dimensiones
@@ -31,8 +47,18 @@ pub struct Screen {
     /// Grid principal
     pub grid: Vec<Vec<Cell>>,
 
-    /// Scrollback buffer (líneas pasadas)
+    /// Flag por fila del grid: true si la fila continúa en la siguiente (soft wrap)
+    grid_wrapped: Vec<bool>,
+
+    /// Scrollback buffer (líneas pasadas) con sus flags de wrap
     scrollback: Vec<Vec<Cell>>,
+    scrollback_wrapped: Vec<bool>,
+
+    /// Líneas descartadas del scrollback desde el inicio (para índices absolutos estables)
+    lines_scrolled_off: usize,
+
+    /// Desplazamiento de la vista sobre el scrollback (0 = pegado abajo, en vivo)
+    view_offset: usize,
 
     /// Cursor
     pub cursor: Cursor,
@@ -46,7 +72,7 @@ pub struct Screen {
     /// Contexto semántico por línea
     pub line_contexts: Vec<LineContext>,
 
-    /// Cache de ContentType detectado por línea (para evitar re-análisis costosos)
+    /// Cache de ContentType detectado por línea visible (para evitar re-análisis costosos)
     pub content_type_cache: Vec<Option<ContentType>>,
 
     /// Región de scroll (DECSTBM): primera y última fila, inclusive
@@ -68,8 +94,23 @@ pub struct Screen {
     /// Auto-wrap (DECAWM, modo 7)
     pub autowrap: bool,
 
+    /// Modo de mouse tracking activo
+    pub mouse_mode: MouseMode,
+
+    /// Codificación SGR para mouse (modo 1006)
+    pub mouse_sgr: bool,
+
     /// Título de ventana pendiente (OSC 0/2), consumido por la app
     pending_title: Option<String>,
+
+    /// Registro de URIs de hyperlinks OSC 8
+    hyperlinks: Vec<String>,
+
+    /// Hyperlink activo para próximas escrituras
+    current_hyperlink: Option<u16>,
+
+    /// Marcas de prompt (OSC 133;A) como índices de línea absolutos
+    prompt_marks: Vec<usize>,
 
     /// Modo de sugerencia activo (para autocompletado)
     suggestion_mode: bool,
@@ -105,6 +146,11 @@ pub struct Selection {
     pub end: (usize, usize),
 }
 
+/// Caracteres que forman parte de una "palabra" para la selección por doble click
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '~' | ':' | '@')
+}
+
 impl Screen {
     pub fn new(rows: usize, cols: usize) -> Self {
         let grid = vec![vec![Cell::empty(); cols]; rows];
@@ -113,7 +159,11 @@ impl Screen {
             rows,
             cols,
             grid,
+            grid_wrapped: vec![false; rows],
             scrollback: Vec::new(),
+            scrollback_wrapped: Vec::new(),
+            lines_scrolled_off: 0,
+            view_offset: 0,
             cursor: Cursor::new(),
             current_attrs: CellAttributes::default(),
             max_scrollback: 10_000,
@@ -126,16 +176,26 @@ impl Screen {
             last_char: None,
             bracketed_paste: false,
             autowrap: true,
+            mouse_mode: MouseMode::None,
+            mouse_sgr: false,
             pending_title: None,
+            hyperlinks: Vec::new(),
+            current_hyperlink: None,
+            prompt_marks: Vec::new(),
             suggestion_mode: false,
             suggestion_start_col: 0,
             command_history: CommandHistory::from_shell_history(1000),
             current_command: String::new(),
             command_start_col: 0,
             active_suggestion: None,
-            dirty: true, // Inicialmente marcado como dirty
+            dirty: true,
             selection: None,
         }
+    }
+
+    /// Ajusta el máximo de líneas de scrollback (desde la config)
+    pub fn set_max_scrollback(&mut self, max: usize) {
+        self.max_scrollback = max;
     }
 
     /// Verifica si el screen necesita ser re-renderizado
@@ -152,6 +212,154 @@ impl Screen {
     fn mark_dirty(&mut self) {
         self.dirty = true;
     }
+
+    // ==================== Vista de scrollback ====================
+
+    /// Desplazamiento actual de la vista (0 = en vivo)
+    pub fn view_offset(&self) -> usize {
+        self.view_offset
+    }
+
+    /// Cantidad de líneas disponibles en el scrollback
+    pub fn scrollback_len(&self) -> usize {
+        self.scrollback.len()
+    }
+
+    /// Desplaza la vista hacia arriba (hacia el pasado)
+    pub fn scroll_view_up(&mut self, n: usize) {
+        if self.alt_screen.is_some() {
+            return;
+        }
+        let new_offset = (self.view_offset + n).min(self.scrollback.len());
+        if new_offset != self.view_offset {
+            self.view_offset = new_offset;
+            self.invalidate_all_lines();
+            self.mark_dirty();
+        }
+    }
+
+    /// Desplaza la vista hacia abajo (hacia el presente)
+    pub fn scroll_view_down(&mut self, n: usize) {
+        let new_offset = self.view_offset.saturating_sub(n);
+        if new_offset != self.view_offset {
+            self.view_offset = new_offset;
+            self.invalidate_all_lines();
+            self.mark_dirty();
+        }
+    }
+
+    /// Vuelve la vista al presente (pegada abajo)
+    pub fn reset_view(&mut self) {
+        if self.view_offset != 0 {
+            self.view_offset = 0;
+            self.invalidate_all_lines();
+            self.mark_dirty();
+        }
+    }
+
+    /// Línea visible en la fila `row` de la pantalla, considerando el scroll de vista.
+    /// Devuelve un slice vacío si la fila no existe.
+    pub fn display_line(&self, row: usize) -> &[Cell] {
+        let sb = self.scrollback.len();
+        let offset = self.view_offset.min(sb);
+        let idx = sb - offset + row;
+        if idx < sb {
+            &self.scrollback[idx]
+        } else {
+            let g = idx - sb;
+            if g < self.grid.len() {
+                &self.grid[g]
+            } else {
+                &[]
+            }
+        }
+    }
+
+    // ==================== Marcas de prompt (OSC 133) ====================
+
+    /// Índice absoluto de la línea donde está el cursor
+    fn cursor_abs_line(&self) -> usize {
+        self.lines_scrolled_off + self.scrollback.len() + self.cursor.row
+    }
+
+    /// Registra el inicio de un prompt (OSC 133;A)
+    pub fn mark_prompt(&mut self) {
+        let abs = self.cursor_abs_line();
+        if self.prompt_marks.last() != Some(&abs) {
+            self.prompt_marks.push(abs);
+        }
+    }
+
+    /// Índice absoluto de la primera fila visible
+    fn view_top_abs(&self) -> usize {
+        self.lines_scrolled_off + self.scrollback.len()
+            - self.view_offset.min(self.scrollback.len())
+    }
+
+    /// Convierte un índice absoluto a un view_offset y lo aplica
+    fn view_to_abs(&mut self, abs: usize) {
+        let sb_start = self.lines_scrolled_off;
+        let sb_len = self.scrollback.len();
+        if abs < sb_start + sb_len {
+            self.view_offset = sb_len - (abs - sb_start);
+        } else {
+            self.view_offset = 0;
+        }
+        self.invalidate_all_lines();
+        self.mark_dirty();
+    }
+
+    /// Salta la vista al prompt anterior
+    pub fn view_to_prev_prompt(&mut self) {
+        let top = self.view_top_abs();
+        if let Some(&mark) = self.prompt_marks.iter().rev().find(|&&m| m < top) {
+            self.view_to_abs(mark);
+        }
+    }
+
+    /// Salta la vista al prompt siguiente
+    pub fn view_to_next_prompt(&mut self) {
+        let top = self.view_top_abs();
+        if let Some(&mark) = self.prompt_marks.iter().find(|&&m| m > top) {
+            self.view_to_abs(mark);
+        } else {
+            self.reset_view();
+        }
+    }
+
+    // ==================== Hyperlinks (OSC 8) ====================
+
+    /// Define el hyperlink activo para próximas escrituras (None lo termina)
+    pub fn set_hyperlink(&mut self, uri: Option<String>) {
+        self.current_hyperlink = uri.and_then(|u| {
+            if u.is_empty() {
+                return None;
+            }
+            if let Some(pos) = self.hyperlinks.iter().position(|h| h == &u) {
+                Some(pos as u16)
+            } else if self.hyperlinks.len() < u16::MAX as usize {
+                self.hyperlinks.push(u);
+                Some((self.hyperlinks.len() - 1) as u16)
+            } else {
+                None
+            }
+        });
+    }
+
+    /// URI de un hyperlink registrado
+    pub fn hyperlink_uri(&self, id: u16) -> Option<&str> {
+        self.hyperlinks.get(id as usize).map(|s| s.as_str())
+    }
+
+    /// Hyperlink bajo una posición visible (fila/columna de pantalla)
+    pub fn display_hyperlink_at(&self, row: usize, col: usize) -> Option<&str> {
+        let line = self.display_line(row);
+        line.get(col)
+            .and_then(|cell| cell.hyperlink)
+            .and_then(|id| self.hyperlink_uri(id))
+    }
+
+    // ==================== Escritura ====================
 
     /// Celda en blanco con el color de fondo actual (Background Color Erase)
     fn blank_cell(&self) -> Cell {
@@ -189,6 +397,10 @@ impl Screen {
 
         if self.cursor.col >= self.cols {
             if self.autowrap {
+                // Soft wrap: la fila actual continúa en la siguiente
+                if self.cursor.row < self.grid_wrapped.len() {
+                    self.grid_wrapped[self.cursor.row] = true;
+                }
                 self.cursor.col = 0;
                 self.index();
             } else {
@@ -197,24 +409,20 @@ impl Screen {
         }
 
         if self.cursor.row < self.rows && self.cursor.col < self.cols {
-            // Si no estamos en modo sugerencia pero hay sugerencias visibles,
-            // limpiarlas antes de escribir texto normal
             if !self.suggestion_mode && self.has_suggestions() {
                 self.clear_suggestions();
             }
 
             let mut cell = Cell::with_attrs(ch, self.current_attrs);
             let width = (cell.width as usize).max(1);
+            cell.hyperlink = self.current_hyperlink;
 
-            // Si estamos en modo sugerencia, marcar la celda
             if self.suggestion_mode {
                 cell.is_suggestion = true;
             }
 
-            // Escribir la celda
             self.grid[self.cursor.row][self.cursor.col] = cell;
 
-            // Si el carácter es ancho, marcar las celdas siguientes como continuación
             if width > 1 {
                 for i in 1..width {
                     if self.cursor.col + i < self.cols {
@@ -264,8 +472,11 @@ impl Screen {
 
     /// Line feed - avanza una línea (respetando la región de scroll)
     pub fn line_feed(&mut self) {
-        // Limpiar sugerencia activa
         self.active_suggestion = None;
+        // Un line feed explícito es un corte duro: la línea no continúa
+        if self.cursor.row < self.grid_wrapped.len() {
+            self.grid_wrapped[self.cursor.row] = false;
+        }
         self.index();
     }
 
@@ -288,16 +499,28 @@ impl Screen {
                 break;
             }
             let line = self.grid.remove(self.scroll_top);
+            let wrapped = if self.scroll_top < self.grid_wrapped.len() {
+                self.grid_wrapped.remove(self.scroll_top)
+            } else {
+                false
+            };
 
             // Solo guardar en scrollback si es pantalla principal y región completa
             if full_screen && self.alt_screen.is_none() {
                 self.scrollback.push(line);
+                self.scrollback_wrapped.push(wrapped);
                 if self.scrollback.len() > self.max_scrollback {
                     self.scrollback.remove(0);
+                    self.scrollback_wrapped.remove(0);
+                    self.lines_scrolled_off += 1;
+                    let off = self.lines_scrolled_off;
+                    self.prompt_marks.retain(|&m| m >= off);
                 }
             }
 
             self.grid.insert(self.scroll_bottom, self.blank_line());
+            self.grid_wrapped
+                .insert(self.scroll_bottom.min(self.grid_wrapped.len()), false);
         }
     }
 
@@ -312,6 +535,10 @@ impl Screen {
             }
             self.grid.remove(self.scroll_bottom);
             self.grid.insert(self.scroll_top, self.blank_line());
+            if self.scroll_bottom < self.grid_wrapped.len() {
+                self.grid_wrapped.remove(self.scroll_bottom);
+                self.grid_wrapped.insert(self.scroll_top, false);
+            }
         }
     }
 
@@ -324,7 +551,6 @@ impl Screen {
             self.scroll_top = 0;
             self.scroll_bottom = self.rows.saturating_sub(1);
         }
-        // Per spec, el cursor vuelve al origen
         self.cursor.row = 0;
         self.cursor.col = 0;
         self.mark_dirty();
@@ -340,6 +566,10 @@ impl Screen {
         for _ in 0..n.min(self.scroll_bottom - self.cursor.row + 1) {
             self.grid.remove(self.scroll_bottom);
             self.grid.insert(self.cursor.row, self.blank_line());
+            if self.scroll_bottom < self.grid_wrapped.len() {
+                self.grid_wrapped.remove(self.scroll_bottom);
+                self.grid_wrapped.insert(self.cursor.row, false);
+            }
         }
     }
 
@@ -353,6 +583,11 @@ impl Screen {
         for _ in 0..n.min(self.scroll_bottom - self.cursor.row + 1) {
             self.grid.remove(self.cursor.row);
             self.grid.insert(self.scroll_bottom, self.blank_line());
+            if self.cursor.row < self.grid_wrapped.len() {
+                self.grid_wrapped.remove(self.cursor.row);
+                self.grid_wrapped
+                    .insert(self.scroll_bottom.min(self.grid_wrapped.len()), false);
+            }
         }
     }
 
@@ -429,6 +664,9 @@ impl Screen {
             3 => {
                 self.clear();
                 self.scrollback.clear();
+                self.scrollback_wrapped.clear();
+                self.view_offset = 0;
+                self.prompt_marks.clear();
             }
             _ => {}
         }
@@ -463,6 +701,9 @@ impl Screen {
             for cell in row {
                 *cell = blank.clone();
             }
+        }
+        for flag in &mut self.grid_wrapped {
+            *flag = false;
         }
     }
 
@@ -521,9 +762,15 @@ impl Screen {
         }
         self.mark_dirty();
         self.invalidate_all_lines();
-        let main_grid = std::mem::replace(&mut self.grid, vec![vec![Cell::empty(); self.cols]; self.rows]);
+        self.reset_view();
+        let main_grid = std::mem::replace(
+            &mut self.grid,
+            vec![vec![Cell::empty(); self.cols]; self.rows],
+        );
+        let main_wrapped = std::mem::replace(&mut self.grid_wrapped, vec![false; self.rows]);
         self.alt_screen = Some(MainScreenState {
             grid: main_grid,
+            grid_wrapped: main_wrapped,
             cursor: self.cursor,
             attrs: self.current_attrs,
         });
@@ -544,14 +791,17 @@ impl Screen {
             for row in &mut state.grid {
                 row.resize(self.cols, Cell::empty());
             }
+            state.grid_wrapped.resize(self.rows, false);
 
             self.grid = state.grid;
+            self.grid_wrapped = state.grid_wrapped;
             self.cursor.row = state.cursor.row.min(self.rows.saturating_sub(1));
             self.cursor.col = state.cursor.col.min(self.cols.saturating_sub(1));
             self.cursor.visible = true;
             self.current_attrs = state.attrs;
             self.scroll_top = 0;
             self.scroll_bottom = self.rows.saturating_sub(1);
+            self.mouse_mode = MouseMode::None;
         }
     }
 
@@ -570,7 +820,11 @@ impl Screen {
         self.saved_cursor = None;
         self.bracketed_paste = false;
         self.autowrap = true;
+        self.mouse_mode = MouseMode::None;
+        self.mouse_sgr = false;
         self.last_char = None;
+        self.current_hyperlink = None;
+        self.view_offset = 0;
         self.clear();
     }
 
@@ -616,25 +870,20 @@ impl Screen {
             .unwrap_or(LineContext::Normal)
     }
 
-    /// Redimensiona la pantalla
+    // ==================== Resize y reflow ====================
+
+    /// Redimensiona la pantalla. Si cambia el ancho y estamos en la pantalla
+    /// principal, re-envuelve las líneas lógicas al nuevo ancho (reflow).
     pub fn resize(&mut self, new_rows: usize, new_cols: usize) {
+        if new_rows == 0 || new_cols == 0 || (new_rows == self.rows && new_cols == self.cols) {
+            return;
+        }
         self.mark_dirty();
-        // Si hay menos filas, mover las eliminadas al scrollback
-        while self.grid.len() > new_rows {
-            let line = self.grid.remove(0);
-            if self.alt_screen.is_none() {
-                self.scrollback.push(line);
-            }
-        }
 
-        // Si hay más filas, agregar vacías
-        while self.grid.len() < new_rows {
-            self.grid.push(vec![Cell::empty(); new_cols]);
-        }
-
-        // Ajustar columnas
-        for row in &mut self.grid {
-            row.resize(new_cols, Cell::empty());
+        if new_cols != self.cols && self.alt_screen.is_none() {
+            self.reflow(new_rows, new_cols);
+        } else {
+            self.resize_simple(new_rows, new_cols);
         }
 
         self.rows = new_rows;
@@ -649,14 +898,179 @@ impl Screen {
         self.content_type_cache.resize(new_rows, None);
         self.invalidate_all_lines();
 
-        // Limitar cursor
+        // Limitar cursor y vista
         if self.cursor.row >= new_rows {
             self.cursor.row = new_rows.saturating_sub(1);
         }
         if self.cursor.col >= new_cols {
             self.cursor.col = new_cols.saturating_sub(1);
         }
+        self.view_offset = self.view_offset.min(self.scrollback.len());
     }
+
+    /// Resize sin reflow (alt screen o cambio solo de filas)
+    fn resize_simple(&mut self, new_rows: usize, new_cols: usize) {
+        while self.grid.len() > new_rows {
+            let line = self.grid.remove(0);
+            let wrapped = if !self.grid_wrapped.is_empty() {
+                self.grid_wrapped.remove(0)
+            } else {
+                false
+            };
+            if self.alt_screen.is_none() {
+                self.scrollback.push(line);
+                self.scrollback_wrapped.push(wrapped);
+            }
+        }
+
+        while self.grid.len() < new_rows {
+            self.grid.push(vec![Cell::empty(); new_cols]);
+            self.grid_wrapped.push(false);
+        }
+        self.grid_wrapped.resize(new_rows, false);
+
+        for row in &mut self.grid {
+            row.resize(new_cols, Cell::empty());
+        }
+    }
+
+    /// Re-envuelve todo el contenido (scrollback + pantalla) al nuevo ancho
+    fn reflow(&mut self, new_rows: usize, new_cols: usize) {
+        // 1. Posición absoluta del cursor dentro del stream combinado
+        let cursor_stream_row = self.scrollback.len() + self.cursor.row;
+        let cursor_col = self.cursor.col;
+
+        // 2. Combinar scrollback + grid con sus flags
+        let mut rows: Vec<Vec<Cell>> = std::mem::take(&mut self.scrollback);
+        let mut wrapped: Vec<bool> = std::mem::take(&mut self.scrollback_wrapped);
+        wrapped.resize(rows.len(), false);
+        rows.append(&mut self.grid);
+        let mut grid_wrapped = std::mem::take(&mut self.grid_wrapped);
+        grid_wrapped.resize(rows.len() - wrapped.len(), false);
+        wrapped.append(&mut grid_wrapped);
+
+        // 3. Construir líneas lógicas, registrando la posición lógica del cursor
+        let old_cols = self.cols;
+        let mut logical: Vec<Vec<Cell>> = Vec::new();
+        let mut cursor_logical: Option<(usize, usize)> = None; // (línea lógica, offset)
+        let mut current: Vec<Cell> = Vec::new();
+        let mut rows_in_current = 0usize;
+
+        for (i, row) in rows.into_iter().enumerate() {
+            if i == cursor_stream_row {
+                cursor_logical = Some((logical.len(), rows_in_current * old_cols + cursor_col));
+            }
+            let is_wrapped = wrapped.get(i).copied().unwrap_or(false);
+            current.extend(row);
+            rows_in_current += 1;
+            if !is_wrapped {
+                // Corte duro: recortar blancos finales y cerrar la línea lógica
+                while current
+                    .last()
+                    .map(|c| c.character == ' ' && c.hyperlink.is_none())
+                    == Some(true)
+                {
+                    current.pop();
+                }
+                logical.push(std::mem::take(&mut current));
+                rows_in_current = 0;
+            }
+        }
+        if !current.is_empty() || rows_in_current > 0 {
+            logical.push(current);
+        }
+
+        // 4. Re-envolver cada línea lógica al nuevo ancho
+        let mut new_lines: Vec<Vec<Cell>> = Vec::new();
+        let mut new_wrapped: Vec<bool> = Vec::new();
+        let mut new_cursor_stream: Option<(usize, usize)> = None;
+
+        for (li, line) in logical.into_iter().enumerate() {
+            let first_new_row = new_lines.len();
+            if line.is_empty() {
+                new_lines.push(vec![Cell::empty(); new_cols]);
+                new_wrapped.push(false);
+            } else {
+                let mut chunks = line.chunks(new_cols).peekable();
+                while let Some(chunk) = chunks.next() {
+                    let mut row: Vec<Cell> = chunk.to_vec();
+                    row.resize(new_cols, Cell::empty());
+                    new_lines.push(row);
+                    new_wrapped.push(chunks.peek().is_some());
+                }
+            }
+            if let Some((cl, offset)) = cursor_logical {
+                if cl == li {
+                    let r = first_new_row + offset / new_cols;
+                    let c = offset % new_cols;
+                    new_cursor_stream = Some((r.min(new_lines.len().saturating_sub(1)), c));
+                }
+            }
+        }
+
+        // Las filas en blanco al final (debajo del cursor) no son contenido:
+        // recortarlas para que no empujen líneas reales al scrollback
+        let keep_min = new_cursor_stream.map(|(r, _)| r + 1).unwrap_or(1);
+        while new_lines.len() > keep_min
+            && new_lines.last().is_some_and(|row| {
+                row.iter()
+                    .all(|c| c.character == ' ' && c.hyperlink.is_none())
+            })
+        {
+            new_lines.pop();
+            new_wrapped.pop();
+        }
+
+        // 5. Distribuir: las últimas new_rows van a pantalla, el resto a scrollback
+        let total = new_lines.len();
+        let grid_start = total.saturating_sub(new_rows);
+
+        // El cursor debe quedar en pantalla: si cae antes, anclar el grid ahí
+        let grid_start = match new_cursor_stream {
+            Some((r, _)) if r < grid_start => r,
+            _ => grid_start,
+        };
+
+        self.scrollback = new_lines[..grid_start].to_vec();
+        self.scrollback_wrapped = new_wrapped[..grid_start].to_vec();
+        self.grid = new_lines[grid_start..].to_vec();
+        self.grid_wrapped = new_wrapped[grid_start..].to_vec();
+
+        while self.grid.len() < new_rows {
+            self.grid.push(vec![Cell::empty(); new_cols]);
+            self.grid_wrapped.push(false);
+        }
+        // Si el grid quedó más grande que new_rows (cursor anclado arriba), recortar abajo
+        while self.grid.len() > new_rows {
+            self.grid.pop();
+            self.grid_wrapped.pop();
+        }
+
+        // Limitar scrollback
+        while self.scrollback.len() > self.max_scrollback {
+            self.scrollback.remove(0);
+            self.scrollback_wrapped.remove(0);
+            self.lines_scrolled_off += 1;
+        }
+
+        // 6. Recolocar el cursor
+        match new_cursor_stream {
+            Some((r, c)) => {
+                self.cursor.row = r.saturating_sub(grid_start).min(new_rows.saturating_sub(1));
+                self.cursor.col = c.min(new_cols.saturating_sub(1));
+            }
+            None => {
+                self.cursor.row = self.cursor.row.min(new_rows.saturating_sub(1));
+                self.cursor.col = self.cursor.col.min(new_cols.saturating_sub(1));
+            }
+        }
+
+        // Las marcas de prompt dejan de ser válidas tras un reflow
+        self.prompt_marks.clear();
+        self.view_offset = 0;
+    }
+
+    // ==================== Sugerencias ====================
 
     /// Activa el modo de sugerencia (texto aparecerá en gris)
     pub fn start_suggestion(&mut self) {
@@ -676,7 +1090,6 @@ impl Screen {
                 if self.grid[self.cursor.row][col].is_suggestion {
                     self.grid[self.cursor.row][col] = Cell::empty();
                 } else {
-                    // Si encontramos una celda que no es sugerencia, detenernos
                     break;
                 }
             }
@@ -697,12 +1110,6 @@ impl Screen {
 
     /// Actualiza la sugerencia automática basada en el historial
     fn update_auto_suggestion(&mut self) {
-        log::trace!(
-            "update_auto_suggestion, current_command: '{}'",
-            self.current_command
-        );
-
-        // Limpiar sugerencia anterior
         if self.active_suggestion.is_some() {
             self.clear_auto_suggestion();
         }
@@ -712,19 +1119,9 @@ impl Screen {
             return;
         }
 
-        // Buscar sugerencia en historial
         if let Some(suggestion) = self.command_history.find_suggestion(&self.current_command) {
-            log::trace!(
-                "Mostrando sugerencia: '{}' después de col {} + len {}",
-                suggestion,
-                self.command_start_col,
-                self.current_command.len()
-            );
-
-            // Guardar sugerencia activa
             self.active_suggestion = Some(suggestion.clone());
 
-            // Mostrar sugerencia después del comando actual
             let start_col = self.command_start_col + self.current_command.len();
             for (i, ch) in suggestion.chars().enumerate() {
                 let col = start_col + i;
@@ -758,10 +1155,8 @@ impl Screen {
     /// Acepta la sugerencia actual (llamar cuando el usuario presiona Tab o →)
     pub fn accept_suggestion(&mut self) {
         if let Some(suggestion) = &self.active_suggestion {
-            // Agregar la sugerencia al comando actual
             self.current_command.push_str(suggestion);
 
-            // Convertir las celdas de sugerencia a texto normal
             let start_col = self.cursor.col;
             for (i, ch) in suggestion.chars().enumerate() {
                 let col = start_col + i;
@@ -772,22 +1167,16 @@ impl Screen {
                 }
             }
 
-            // Mover cursor al final de la sugerencia
             self.cursor.col += suggestion.len();
-
-            // Limpiar sugerencia activa
             self.active_suggestion = None;
             self.mark_dirty();
         }
     }
 
     /// Acepta la sugerencia sin renderizar (el PTY hará el eco)
-    /// Solo actualiza el current_command y limpia la sugerencia visual
     pub fn accept_suggestion_for_pty(&mut self) {
         if self.active_suggestion.is_some() {
-            // Agregar la sugerencia al comando actual
             let suggestion = self.active_suggestion.clone().unwrap_or_default();
-            // Limpiar la sugerencia visual (el eco del PTY la escribirá)
             self.clear_auto_suggestion();
             self.current_command.push_str(&suggestion);
         }
@@ -800,13 +1189,10 @@ impl Screen {
 
     /// Agrega un carácter al comando actual (desde input del usuario)
     pub fn add_user_input(&mut self, ch: char) {
-        // Aceptar cualquier carácter que no sea de control (incluyendo UTF-8)
         if !ch.is_control() {
-            // Si es el primer carácter del comando, guardar posición inicial
             if self.current_command.is_empty() {
                 self.command_start_col = self.cursor.col;
             }
-
             self.current_command.push(ch);
             self.update_auto_suggestion();
         }
@@ -822,7 +1208,6 @@ impl Screen {
 
     /// Resetea el comando actual (Enter desde usuario)
     pub fn reset_user_input(&mut self) {
-        // Limpiar sugerencia visual antes de resetear
         if self.active_suggestion.is_some() {
             self.clear_auto_suggestion();
         }
@@ -842,6 +1227,8 @@ impl Screen {
         self.cursor.col = col.min(self.cols.saturating_sub(1));
         self.mark_dirty();
     }
+
+    // ==================== Selección ====================
 
     /// Inicia una selección en la posición especificada
     pub fn start_selection(&mut self, row: usize, col: usize) {
@@ -864,6 +1251,36 @@ impl Screen {
         }
     }
 
+    /// Selecciona la palabra bajo la posición dada (doble click)
+    pub fn select_word(&mut self, row: usize, col: usize) {
+        let line = self.display_line(row);
+        if col >= line.len() || !is_word_char(line[col].character) {
+            return;
+        }
+        let mut start = col;
+        while start > 0 && is_word_char(line[start - 1].character) {
+            start -= 1;
+        }
+        let mut end = col;
+        while end + 1 < line.len() && is_word_char(line[end + 1].character) {
+            end += 1;
+        }
+        self.selection = Some(Selection {
+            start: (row, start),
+            end: (row, end),
+        });
+        self.mark_dirty();
+    }
+
+    /// Selecciona la línea completa (triple click)
+    pub fn select_line(&mut self, row: usize) {
+        self.selection = Some(Selection {
+            start: (row, 0),
+            end: (row, self.cols.saturating_sub(1)),
+        });
+        self.mark_dirty();
+    }
+
     /// Limpia la selección actual
     pub fn clear_selection(&mut self) {
         if self.selection.is_some() {
@@ -883,7 +1300,6 @@ impl Screen {
             let (start_row, start_col) = selection.start;
             let (end_row, end_col) = selection.end;
 
-            // Normalizar la selección para que start sea siempre antes que end
             let (start_row, start_col, end_row, end_col) =
                 if (start_row, start_col) <= (end_row, end_col) {
                     (start_row, start_col, end_row, end_col)
@@ -891,22 +1307,17 @@ impl Screen {
                     (end_row, end_col, start_row, start_col)
                 };
 
-            // Verificar si la posición está dentro del rango
             if row < start_row || row > end_row {
                 return false;
             }
 
             if row == start_row && row == end_row {
-                // Misma fila
                 col >= start_col && col <= end_col
             } else if row == start_row {
-                // Primera fila de la selección
                 col >= start_col
             } else if row == end_row {
-                // Última fila de la selección
                 col <= end_col
             } else {
-                // Filas intermedias
                 true
             }
         } else {
@@ -914,13 +1325,12 @@ impl Screen {
         }
     }
 
-    /// Obtiene el texto seleccionado
+    /// Obtiene el texto seleccionado (sobre las líneas visibles)
     pub fn get_selected_text(&self) -> Option<String> {
         let selection = self.selection?;
         let (start_row, start_col) = selection.start;
         let (end_row, end_col) = selection.end;
 
-        // Normalizar la selección
         let (start_row, start_col, end_row, end_col) =
             if (start_row, start_col) <= (end_row, end_col) {
                 (start_row, start_col, end_row, end_col)
@@ -934,31 +1344,37 @@ impl Screen {
             if row >= self.rows {
                 break;
             }
+            let line = self.display_line(row);
+            if line.is_empty() {
+                continue;
+            }
 
             let start_col_in_row = if row == start_row { start_col } else { 0 };
             let end_col_in_row = if row == end_row {
                 end_col
             } else {
-                self.cols - 1
+                line.len().saturating_sub(1)
             };
 
-            for col in start_col_in_row..=end_col_in_row.min(self.cols - 1) {
-                let cell = &self.grid[row][col];
+            let last = end_col_in_row.min(line.len().saturating_sub(1));
+            for (col, cell) in line
+                .iter()
+                .enumerate()
+                .take(last + 1)
+                .skip(start_col_in_row)
+            {
                 if cell.character != '\0' && cell.character != ' ' {
                     text.push(cell.character);
                 } else if col < end_col_in_row {
-                    // Mantener espacios intermedios, pero no al final de la línea
                     text.push(' ');
                 }
             }
 
-            // Agregar salto de línea si no es la última fila
             if row < end_row {
                 text.push('\n');
             }
         }
 
-        // Limpiar espacios al final
         let trimmed = text.trim_end().to_string();
         if trimmed.is_empty() {
             None

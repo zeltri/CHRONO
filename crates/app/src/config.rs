@@ -2,8 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub font: FontConfig,
@@ -62,7 +61,6 @@ pub struct RenderingConfig {
     #[serde(default = "default_table_detection")]
     pub table_detection: bool,
 }
-
 
 impl Default for FontConfig {
     fn default() -> Self {

@@ -6,9 +6,10 @@
 
 **Construido desde cero en Rust 🦀 — rápido, semántico y hermoso**
 
+[![CI](https://github.com/yoezequiel/CHRONO/actions/workflows/ci.yml/badge.svg)](https://github.com/yoezequiel/CHRONO/actions)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-61%20passing-brightgreen.svg)](#-desarrollo)
+[![Tests](https://img.shields.io/badge/tests-67%20passing-brightgreen.svg)](#-desarrollo)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg)](#%EF%B8%8F-instalación)
 
 [Características](#-características) • [Instalación](#%EF%B8%8F-instalación) • [Uso](#-uso) • [Configuración](#%EF%B8%8F-configuración) • [Arquitectura](#%EF%B8%8F-arquitectura) • [Desarrollo](#-desarrollo)
@@ -56,26 +57,32 @@ Todo sobre una base VT sólida: **CHRONO habla el protocolo de verdad**, no una 
 - ✅ **Responde consultas** — DA, DSR y CPR; las apps que preguntan dónde está el cursor obtienen respuesta
 - ✅ **Bracketed paste** (2004) — pegar código en vim sin autoindentación fantasma
 - ✅ **Cursor guardado/restaurado** (DECSC/DECRC), índices RI/IND/NEL, reset completo (RIS)
+- ✅ **Mouse tracking** (modos 9/1000/1002/1003 + SGR 1006) — click y rueda funcionan en `htop`, `vim` y tmux
+- ✅ **Hyperlinks OSC 8** — `ls --hyperlink` y compiladores modernos emiten enlaces clickeables de verdad
 - ✅ **Título de ventana dinámico** vía OSC 0/2
 - 🌈 **Color total** — 16 ANSI + paleta xterm-256 real (cubo 6×6×6 + grises) + true color 24-bit, video inverso incluido
-- 🈶 **Unicode completo** — CJK de doble ancho, emojis, ancho variable
+- ✍️ **Estilos reales** — bold, italic, underline, strikethrough y dim, renderizados de verdad
+- 🈶 **Unicode completo** — CJK de doble ancho con fallback automático a fuentes del sistema
 
 ### 🎨 Experiencia
 
+- 🗂️ **Tabs** — múltiples sesiones en una ventana (`Ctrl+Shift+T`), con barra elegante y click para cambiar
+- 📜 **Scrollback navegable** — rueda del mouse y `Shift+PageUp/Down`, con indicador de posición
+- 🧭 **Navegación por prompts** — `Ctrl+Shift+↑/↓` salta entre comandos (vía OSC 133)
+- 🔀 **Reflow real** — al redimensionar, las líneas se re-envuelven al nuevo ancho en vez de truncarse
+- 🖱️ **Selección inteligente** — doble click selecciona palabra, triple click la línea
 - 🌃 **Tema OneDark Pro** — paleta profesional lista para vivir en ella
-- ✍️ **Cascadia Code** embebida — cero dependencias de fuentes del sistema
+- ✍️ **Cascadia Code** embebida + fallback automático a fuentes del sistema para CJK y símbolos
 - 📋 **Clipboard nativo** — `Ctrl+Shift+C/V` con soporte Wayland (`wl-copy`) y X11 (`xclip`/`xsel`)
-- 🖱️ **Selección con mouse** y cursor animado con pulso sutil
-- ⚡ **Render por dirty-flags** — solo redibuja cuando algo cambió: CPU en reposo cuando tú reposas
+- ⚡ **Cache de glifos** — cada carácter se rasteriza una sola vez; el render vuela
 - 🔒 **Respeta tu sistema** — jamás toca tus dotfiles; toda la configuración va por variables de entorno
 
 ### 🗺️ Roadmap
 
-- 🔲 Scroll de usuario por el scrollback (rueda del mouse + `Shift+PageUp`)
-- 🔲 Mouse tracking para apps TUI (modos 1000–1006)
+- 🔲 Splits (paneles divididos en una misma tab)
 - 🔲 Renderizado GPU con `wgpu` + glyph atlas
-- 🔲 Tabs y splits
 - 🔲 Soporte completo Windows + empaquetado (`.deb`, AppImage, Homebrew)
+- 🔲 Protocolo de imágenes (Sixel / Kitty graphics)
 
 ---
 
@@ -119,12 +126,16 @@ terminal               # si lo instalaste
 
 | Atajo | Acción |
 | --- | --- |
+| `Ctrl+Shift+T` | Nueva tab |
+| `Ctrl+Shift+W` | Cerrar tab |
+| `Ctrl+Shift+←/→` | Cambiar de tab (o click en la barra) |
+| `Ctrl+Shift+↑/↓` | Saltar al prompt anterior / siguiente |
+| Rueda / `Shift+PageUp/Down` | Navegar el scrollback |
+| Doble / triple click | Seleccionar palabra / línea |
 | `Ctrl+Shift+C` | Copiar selección |
 | `Ctrl+Shift+V` | Pegar (con bracketed paste si la app lo pide) |
 | `Tab` / `→` | Aceptar sugerencia de historial |
-| `Ctrl+C` | SIGINT |
-| `Ctrl+D` | EOF |
-| `Ctrl+L` | Limpiar pantalla |
+| `Shift+click` | Selección normal aunque la app capture el mouse |
 
 ### Pruébalo
 
@@ -202,7 +213,7 @@ CHRONO/
 ## 🧪 Desarrollo
 
 ```bash
-cargo test --all                 # 61 tests ✅
+cargo test --all                 # 67 tests ✅
 cargo clippy --all-targets       # lint
 cargo fmt --all                  # formato
 cargo bench                      # benchmarks

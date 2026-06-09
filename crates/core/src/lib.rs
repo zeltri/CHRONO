@@ -30,4 +30,4 @@ pub use detector::{
     ContentDetector, ContentType, JsonFragment, JsonTokenType, LogLevel, TableInfo, TableRowType,
 };
 pub use history::CommandHistory;
-pub use screen::{Screen, Selection};
+pub use screen::{MouseMode, Screen, Selection};

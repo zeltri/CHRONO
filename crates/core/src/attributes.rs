@@ -4,8 +4,10 @@ pub struct CellAttributes {
     pub fg_color: Color,
     pub bg_color: Color,
     pub bold: bool,
+    pub dim: bool,
     pub italic: bool,
     pub underline: bool,
+    pub strikethrough: bool,
     pub reverse: bool,
 }
 
@@ -15,8 +17,10 @@ impl Default for CellAttributes {
             fg_color: Color::default_fg(),
             bg_color: Color::default_bg(),
             bold: false,
+            dim: false,
             italic: false,
             underline: false,
+            strikethrough: false,
             reverse: false,
         }
     }
@@ -51,8 +55,8 @@ impl Color {
     }
 
     fn indexed_to_rgb(idx: u8) -> (u8, u8, u8) {
-        // Paleta básica de 16 colores
         match idx {
+            // Paleta básica de 16 colores
             0 => (0, 0, 0),        // Negro
             1 => (205, 0, 0),      // Rojo
             2 => (0, 205, 0),      // Verde
@@ -69,8 +73,17 @@ impl Color {
             13 => (255, 0, 255),   // Magenta brillante
             14 => (0, 255, 255),   // Cyan brillante
             15 => (255, 255, 255), // Blanco brillante
-            // Para 16-255: simplificado
-            _ => (idx, idx, idx),
+            // 16-231: cubo de color 6x6x6 (estándar xterm)
+            16..=231 => {
+                let i = idx - 16;
+                let ch = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+                (ch(i / 36), ch((i % 36) / 6), ch(i % 6))
+            }
+            // 232-255: rampa de grises
+            _ => {
+                let gray = 8 + (idx - 232) * 10;
+                (gray, gray, gray)
+            }
         }
     }
 }

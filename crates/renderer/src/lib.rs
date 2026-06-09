@@ -65,7 +65,7 @@ mod tests {
 
     #[test]
     fn test_renderer_creation() {
-        let renderer = CpuRenderer::new(800, 600);
+        let renderer = CpuRenderer::new(800, 600, 16.0);
         assert!(
             renderer.hovered_file.is_none(),
             "Renderer should be created successfully"
@@ -74,24 +74,24 @@ mod tests {
 
     #[test]
     fn test_renderer_resize() {
-        let mut renderer = CpuRenderer::new(800, 600);
+        let mut renderer = CpuRenderer::new(800, 600, 16.0);
         renderer.resize(1024, 768);
         // No panic = success
     }
 
     #[test]
     fn test_renderer_with_empty_screen() {
-        let mut renderer = CpuRenderer::new(800, 600);
+        let mut renderer = CpuRenderer::new(800, 600, 16.0);
         let mut screen = Screen::new(24, 80);
         let mut buffer = vec![0u32; 800 * 600];
 
-        renderer.render(&mut screen, &mut buffer);
+        renderer.render(&mut screen, &mut buffer, &["shell".to_string()], 0);
         // No panic = success, rendering completed
     }
 
     #[test]
     fn test_renderer_with_text() {
-        let mut renderer = CpuRenderer::new(800, 600);
+        let mut renderer = CpuRenderer::new(800, 600, 16.0);
         let mut screen = Screen::new(24, 80);
         let mut buffer = vec![0u32; 800 * 600];
 
@@ -99,7 +99,7 @@ mod tests {
         screen.write_char('H');
         screen.write_char('i');
 
-        renderer.render(&mut screen, &mut buffer);
+        renderer.render(&mut screen, &mut buffer, &["shell".to_string()], 0);
         // No panic = success
     }
 
@@ -117,7 +117,7 @@ mod tests {
     fn test_get_file_color() {
         use terminal_core::{FileEntry, FileType};
 
-        let renderer = CpuRenderer::new(800, 600);
+        let renderer = CpuRenderer::new(800, 600, 16.0);
 
         // Verificar que cada tipo de archivo tenga un color asignado
         let types = vec![

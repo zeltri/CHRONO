@@ -323,6 +323,122 @@ mod tests {
     }
 
     #[test]
+    fn test_hyperlink_osc8() {
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        parser.process(
+            b"\x1b]8;;https://example.com\x07link\x1b]8;;\x07 normal",
+            &mut screen,
+        );
+
+        assert_eq!(
+            screen.display_hyperlink_at(0, 0),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            screen.display_hyperlink_at(0, 3),
+            Some("https://example.com")
+        );
+        assert_eq!(screen.display_hyperlink_at(0, 5), None); // Después del cierre
+    }
+
+    #[test]
+    fn test_mouse_modes() {
+        use terminal_core::MouseMode;
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"\x1b[?1000h", &mut screen);
+        assert_eq!(screen.mouse_mode, MouseMode::Normal);
+        parser.process(b"\x1b[?1002h\x1b[?1006h", &mut screen);
+        assert_eq!(screen.mouse_mode, MouseMode::ButtonEvent);
+        assert!(screen.mouse_sgr);
+        parser.process(b"\x1b[?1002l", &mut screen);
+        assert_eq!(screen.mouse_mode, MouseMode::None);
+    }
+
+    #[test]
+    fn test_sgr_dim_strikethrough() {
+        let mut screen = Screen::new(24, 80);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"\x1b[2;9mX\x1b[22;29mY", &mut screen);
+
+        let grid = screen.get_visible();
+        assert!(grid[0][0].attrs.dim);
+        assert!(grid[0][0].attrs.strikethrough);
+        assert!(!grid[0][1].attrs.dim);
+        assert!(!grid[0][1].attrs.strikethrough);
+    }
+
+    #[test]
+    fn test_prompt_marks_navigation() {
+        let mut screen = Screen::new(3, 20);
+        let mut parser = AnsiParser::new();
+
+        // Dos prompts separados por output que provoca scroll
+        parser.process(
+            b"\x1b]133;A\x07$ uno\r\nout1\r\nout2\r\nout3\r\n",
+            &mut screen,
+        );
+        parser.process(b"\x1b]133;A\x07$ dos", &mut screen);
+
+        assert!(screen.scrollback_len() > 0);
+        screen.view_to_prev_prompt();
+        assert!(screen.view_offset() > 0); // Saltó al primer prompt
+        screen.view_to_next_prompt();
+        // El siguiente prompt está en pantalla → vuelve en vivo o más abajo
+        assert!(screen.view_offset() < screen.scrollback_len());
+    }
+
+    #[test]
+    fn test_view_scrollback() {
+        let mut screen = Screen::new(3, 10);
+        let mut parser = AnsiParser::new();
+
+        parser.process(b"uno\r\ndos\r\ntres\r\ncuatro\r\ncinco", &mut screen);
+        assert_eq!(screen.scrollback_len(), 2);
+
+        // En vivo: la primera fila visible es "tres"
+        assert_eq!(screen.display_line(0)[0].character, 't');
+
+        screen.scroll_view_up(2);
+        assert_eq!(screen.view_offset(), 2);
+        assert_eq!(screen.display_line(0)[0].character, 'u'); // "uno"
+
+        screen.reset_view();
+        assert_eq!(screen.display_line(0)[0].character, 't');
+    }
+
+    #[test]
+    fn test_reflow_on_resize() {
+        let mut screen = Screen::new(5, 10);
+        let mut parser = AnsiParser::new();
+
+        // 14 caracteres en 10 cols → envuelve en 2 filas
+        parser.process(b"abcdefghijklmn", &mut screen);
+        assert_eq!(screen.get_visible()[0][9].character, 'j');
+        assert_eq!(screen.get_visible()[1][0].character, 'k');
+
+        // Ensanchar a 20: la línea lógica vuelve a caber en una fila
+        screen.resize(5, 20);
+        let grid = screen.get_visible();
+        assert_eq!(grid[0][0].character, 'a');
+        assert_eq!(grid[0][13].character, 'n');
+        assert_eq!(grid[1][0].character, ' ');
+        // El cursor queda al final del texto
+        assert_eq!(screen.cursor.row, 0);
+        assert_eq!(screen.cursor.col, 14);
+
+        // Estrechar a 7: se envuelve en dos filas
+        screen.resize(5, 7);
+        let grid = screen.get_visible();
+        assert_eq!(grid[0][0].character, 'a');
+        assert_eq!(grid[1][0].character, 'h');
+    }
+
+    #[test]
     fn test_reverse_index_scrolls_down() {
         let mut screen = Screen::new(3, 10);
         let mut parser = AnsiParser::new();
